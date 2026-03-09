@@ -274,47 +274,80 @@ async function researchPerson(apiKey, name, url) {
   }
   const hint = url.startsWith('http')
     ? `Facebook URL: ${url}` + (fbUsername && !fbUsername.startsWith('profile') ? `\nFacebookユーザー名: ${fbUsername}` : '')
-    : (url ? `所属会社のヒント: ${url}` : '追加情報なし');
+    : (url ? `所属会社のヒント: ${url}` : '');
 
-  const prompt = `あなたは企業調査の専門家です。以下の人物の【最新の勤め先】と【役職】をWeb検索で徹底的に調べてください。
+  const sysPrompt = `あなたは企業調査の専門家です。必ずWeb検索を使って人物の勤め先・役職を調べてください。
+最終回答は必ず以下のJSON形式のみで返してください（説明文不要）:
+{"company":"会社名","position":"役職","website":"会社公式HPのURL","confidence":"high/medium/low","source":"情報源"}
+情報が見つからない場合も: {"company":"不明","position":"不明","website":"","confidence":"low","source":"情報なし"}`;
 
+  const userPrompt = `以下の人物を調べてください。
 氏名: ${name}
-${hint}
+${hint ? hint : ''}
 
-【調査手順】必ず複数回検索してください：
-1. "${name} 会社 役職" で検索
-2. "${name} LinkedIn" で検索
-3. "${name} 代表 社長 取締役 執行役員 部長" など役職キーワードで検索
-4. Facebookユーザー名があれば "${fbUsername || name} Facebook" でも検索
-5. Facebook URLがある場合は "site:facebook.com ${fbUsername || name}" で検索してGoogleキャッシュから公開情報を取得
-6. 会社HP・LinkedIn・ニュース・プレスリリースから最新情報を取得
-7. 取得したFacebook URLに直接アクセスして公開プロフィール情報も確認する
+【必須】以下の順で複数回検索してください:
+1. "${name} 会社 役職"
+2. "${name} LinkedIn"
+3. "${name} 代表取締役 OR 取締役 OR 執行役員 OR 部長 OR マネージャー"
+${fbUsername && !fbUsername.startsWith('profile') ? `4. "${fbUsername}" OR "${name} Facebook"` : ''}
 
-以下のJSON形式のみで回答してください（前後の文章は一切不要）:
-{"company": "会社名", "position": "役職", "website": "会社の公式HPのURL", "confidence": "high/medium/low", "source": "情報源の説明"}
+検索結果からJSON形式で回答してください。`;
 
-情報が見つからない場合: {"company": "不明", "position": "不明", "website": "", "confidence": "low", "source": "情報なし"}`;
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 2000,
-      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-      messages: [{ role: 'user', content: prompt }]
-    })
-  });
-  const data = await res.json();
-  const allText = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
-  try {
-    const m = allText.match(/\{[\s\S]*?"company"[\s\S]*?\}/);
-    if (m) { try { const p = JSON.parse(m[0]); if (p.company) return p; } catch(e2) {} }
-    const cm = allText.match(/"company"\s*:\s*"([^"]+)"/);
-    const pm = allText.match(/"position"\s*:\s*"([^"]+)"/);
-    const wm = allText.match(/"website"\s*:\s*"([^"]+)"/);
-    const fm = allText.match(/"confidence"\s*:\s*"([^"]+)"/);
-    if (cm && cm[1] !== '不明') return { company: cm[1], position: pm?pm[1]:'-', website: wm?wm[1]:'', confidence: fm?fm[1]:'medium', source: '自動抽出' };
-  } catch {}
+  const headers = {
+    'Content-Type': 'application/json',
+    'x-api-key': apiKey,
+    'anthropic-version': '2023-06-01',
+    'anthropic-dangerous-direct-browser-access': 'true'
+  };
+  const tools = [{ type: 'web_search_20250305', name: 'web_search' }];
+
+  // エージェントループ（最大5ターン）
+  let messages = [{ role: 'user', content: userPrompt }];
+  for (let turn = 0; turn < 5; turn++) {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 3000,
+        system: sysPrompt,
+        tools,
+        messages
+      })
+    });
+    const data = await res.json();
+    if (!data.content) break;
+
+    // アシスタントの返答をmessagesに追加
+    messages.push({ role: 'assistant', content: data.content });
+
+    // stop_reason が end_turn → 最終テキストからJSONを抽出
+    if (data.stop_reason === 'end_turn') {
+      const allText = data.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+      try {
+        const m = allText.match(/\{[^{}]*"company"[^{}]*\}/);
+        if (m) { try { const p = JSON.parse(m[0]); if (p.company) return p; } catch(e2) {} }
+        const cm = allText.match(/"company"\s*:\s*"([^"]+)"/);
+        const pm = allText.match(/"position"\s*:\s*"([^"]+)"/);
+        const wm = allText.match(/"website"\s*:\s*"([^"]+)"/);
+        const fm = allText.match(/"confidence"\s*:\s*"([^"]+)"/);
+        if (cm) return { company: cm[1], position: pm?pm[1]:'-', website: wm?wm[1]:'', confidence: fm?fm[1]:'medium', source: '自動抽出' };
+      } catch {}
+      break;
+    }
+
+    // stop_reason が tool_use → 検索結果をmessagesに追加して次のターンへ
+    if (data.stop_reason === 'tool_use') {
+      const toolResults = data.content
+        .filter(b => b.type === 'tool_use')
+        .map(b => ({ type: 'tool_result', tool_use_id: b.id, content: b.type === 'tool_use' ? (b.content || '検索完了') : '' }));
+      if (toolResults.length > 0) {
+        messages.push({ role: 'user', content: toolResults });
+      }
+    } else {
+      break;
+    }
+  }
   return { company: '情報なし', position: '-', website: '', confidence: 'low', source: '' };
 }
 
