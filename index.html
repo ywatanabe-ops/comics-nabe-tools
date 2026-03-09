@@ -297,24 +297,25 @@ ${hint}
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
-    body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 1000,
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 2000,
       tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-      messages: [{ role: 'user', content: prompt }] })
+      messages: [{ role: 'user', content: prompt }]
+    })
   });
   const data = await res.json();
-  const textBlock = data.content?.find(b => b.type === 'text');
-  const raw = textBlock?.text || '';
+  const allText = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
   try {
-    const m = raw.match(/\{[\s\S]*\}/);
-    if (m) {
-      try { return JSON.parse(m[0]); } catch(e2) {}
-    }
-    const cm = raw.match(/"company"\s*:\s*"([^"]+)"/);
-    const pm = raw.match(/"position"\s*:\s*"([^"]+)"/);
-    const fm = raw.match(/"confidence"\s*:\s*"([^"]+)"/);
-    if (cm) return { company: cm[1], position: pm ? pm[1] : '-', confidence: fm ? fm[1] : 'low', source: '自動抽出' };
+    const m = allText.match(/\{[\s\S]*?"company"[\s\S]*?\}/);
+    if (m) { try { const p = JSON.parse(m[0]); if (p.company) return p; } catch(e2) {} }
+    const cm = allText.match(/"company"\s*:\s*"([^"]+)"/);
+    const pm = allText.match(/"position"\s*:\s*"([^"]+)"/);
+    const wm = allText.match(/"website"\s*:\s*"([^"]+)"/);
+    const fm = allText.match(/"confidence"\s*:\s*"([^"]+)"/);
+    if (cm && cm[1] !== '不明') return { company: cm[1], position: pm?pm[1]:'-', website: wm?wm[1]:'', confidence: fm?fm[1]:'medium', source: '自動抽出' };
   } catch {}
-  return { company: '情報なし', position: '-', confidence: 'low', source: raw.slice(0, 150) };
+  return { company: '情報なし', position: '-', website: '', confidence: 'low', source: '' };
 }
 
 function badgeHtml(c) {
