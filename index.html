@@ -136,10 +136,11 @@
     <h2>🔍 勤め先・役職リサーチ</h2>
     <p>氏名＋Facebook URLのリストを貼り付けてAI調査 → CSV出力</p>
     <label class="field">入力リスト（1行1人 / タブ or カンマ区切り）</label>
-    <textarea id="researchInput" placeholder="山田太郎&#9;https://www.facebook.com/yamada.taro&#10;佐藤花子&#9;https://www.facebook.com/hanako.sato"></textarea>
+    <textarea id="researchInput" placeholder="山田太郎&#9;https://www.facebook.com/yamada.taro&#10;佐藤花子&#9;マーケティングエンジン株式会社&#10;鈴木一郎&#9;（URLも会社名もなし）"></textarea>
     <div id="researchError" class="error"></div>
     <div class="btn-row">
-      <button class="btn btn-primary" id="btnResearchStart" onclick="runResearch()">▶ 調査開始</button>
+      <button class="btn btn-primary" id="btnResearchStart" onclick="runResearch()">▶ 勤め先・役職を調査</button>
+      <button class="btn" style="background:#7c3aed;color:white;" id="btnBioStart" onclick="runBio()">👤 他己紹介を生成</button>
       <button class="btn btn-danger" id="btnResearchStop" style="display:none" onclick="stopResearch()">⏹ 停止</button>
       <button class="btn btn-success" id="btnResearchExport" style="display:none" onclick="exportCSV()">📥 CSV出力</button>
     </div>
@@ -159,6 +160,16 @@
         <tbody id="researchBody"></tbody>
       </table>
     </div>
+  </div>
+
+  <!-- 他己紹介結果 -->
+  <div class="card" id="bioResultCard" style="display:none">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+      <h2 style="margin:0">👤 他己紹介</h2>
+      <button onclick="copyBio()" id="btnBioCopy" style="background:#7c3aed;color:white;border:none;border-radius:8px;padding:7px 16px;font-size:13px;font-weight:700;cursor:pointer;">📋 コピー</button>
+    </div>
+    <div id="bioLoading" style="color:#3b82f6;font-size:13px;display:none;">⏳ 生成中...</div>
+    <div id="bioResult" style="white-space:pre-wrap;font-size:13px;line-height:1.8;color:#e2e8f0;background:#0f172a;border-radius:10px;padding:16px;border:1px solid #475569;min-height:80px;"></div>
   </div>
 </div>
 
@@ -256,7 +267,21 @@ function parseResearchInput(text) {
 }
 
 async function researchPerson(apiKey, name, url) {
-  const prompt = `あなたは企業調査の専門家です。以下の人物の【最新の勤め先】と【役職】をWeb検索で調べてください。\n\n氏名: ${name}\nFacebook URL: ${url || '不明'}\n\n必ずWeb検索を使って最新情報を取得し、以下のJSON形式のみで回答してください（前後の文章は一切不要）:\n{"company": "会社名", "position": "役職", "confidence": "high/medium/low", "source": "情報源の説明"}\n\n情報が見つからない場合: {"company": "不明", "position": "不明", "confidence": "low", "source": "情報なし"}`;
+  const hint = url.startsWith('http') ? `Facebook URL: ${url}` : (url ? `所属会社のヒント: ${url}` : '追加情報なし');
+  const prompt = `あなたは企業調査の専門家です。以下の人物の【最新の勤め先】と【役職】をWeb検索で調べてください。
+
+氏名: ${name}
+${hint}
+
+調査手順：
+1. 氏名でGoogle検索し、LinkedIn・会社HP・ニュース等から最新情報を取得
+2. Facebook URLがある場合はプロフィール情報も参考にする
+3. 会社名ヒントがある場合はその会社での役職を重点的に調査
+
+以下のJSON形式のみで回答してください（前後の文章は一切不要）:
+{"company": "会社名", "position": "役職", "confidence": "high/medium/low", "source": "情報源の説明"}
+
+情報が見つからない場合: {"company": "不明", "position": "不明", "confidence": "low", "source": "情報なし"}`;
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
@@ -267,8 +292,17 @@ async function researchPerson(apiKey, name, url) {
   const data = await res.json();
   const textBlock = data.content?.find(b => b.type === 'text');
   const raw = textBlock?.text || '';
-  try { const m = raw.match(/\{[\s\S]*?\}/); if (m) return JSON.parse(m[0]); } catch {}
-  return { company: '解析エラー', position: '-', confidence: 'low', source: raw.slice(0,80) };
+  try {
+    const m = raw.match(/\{[\s\S]*\}/);
+    if (m) {
+      try { return JSON.parse(m[0]); } catch(e2) {}
+    }
+    const cm = raw.match(/"company"\s*:\s*"([^"]+)"/);
+    const pm = raw.match(/"position"\s*:\s*"([^"]+)"/);
+    const fm = raw.match(/"confidence"\s*:\s*"([^"]+)"/);
+    if (cm) return { company: cm[1], position: pm ? pm[1] : '-', confidence: fm ? fm[1] : 'low', source: '自動抽出' };
+  } catch {}
+  return { company: '情報なし', position: '-', confidence: 'low', source: raw.slice(0, 150) };
 }
 
 function badgeHtml(c) {
@@ -343,6 +377,77 @@ function exportCSV() {
   a.href = URL.createObjectURL(blob);
   a.download = `企業調査_${new Date().toISOString().slice(0,10)}.csv`;
   a.click();
+}
+
+// ===== BIO =====
+async function runBio() {
+  const apiKey = getApiKey();
+  const inputText = document.getElementById('researchInput').value;
+  const errEl = document.getElementById('researchError');
+  if (!apiKey) { errEl.textContent = '上のAPIキーを入力・保存してください'; return; }
+  const people = parseResearchInput(inputText);
+  if (!people.length) { errEl.textContent = 'データを入力してください'; return; }
+  errEl.textContent = '';
+
+  document.getElementById('bioResultCard').style.display = '';
+  document.getElementById('bioLoading').style.display = '';
+  document.getElementById('bioResult').textContent = '';
+  document.getElementById('btnBioCopy').style.display = 'none';
+
+  const bioTexts = [];
+
+  for (let i = 0; i < people.length; i++) {
+    const { name, url } = people[i];
+    const hint = url.startsWith('http') ? `Facebook URL: ${url}` : (url ? `所属会社: ${url}` : '');
+    const prompt = `以下の人物について、Web検索で公開情報を調べて、日本語で「他己紹介文」を作成してください。
+
+氏名: ${name}
+${hint}
+
+【他己紹介文の要件】
+- 200〜300文字程度
+- 勤め先・役職・経歴・専門分野・実績などを含める
+- 自然で読みやすい紹介文にする
+- 「〇〇さんは〜」という書き出しで始める
+- 情報が少ない場合は分かる範囲で書く
+
+紹介文のテキストのみ返してください（説明文は不要）。`;
+
+    try {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514', max_tokens: 1000,
+          tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+          messages: [{ role: 'user', content: prompt }]
+        })
+      });
+      const data = await res.json();
+      const text = data.content?.find(b => b.type === 'text')?.text || '情報が見つかりませんでした';
+      bioTexts.push(`■ ${name}
+${text}`);
+    } catch(e) {
+      bioTexts.push(`■ ${name}
+エラー: ${e.message}`);
+    }
+    if (i < people.length - 1) await new Promise(r => setTimeout(r, 1500));
+  }
+
+  document.getElementById('bioLoading').style.display = 'none';
+  document.getElementById('bioResult').textContent = bioTexts.join('
+
+');
+  document.getElementById('btnBioCopy').style.display = '';
+}
+
+function copyBio() {
+  const text = document.getElementById('bioResult').textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('btnBioCopy');
+    btn.textContent = '✅ コピーしました！';
+    setTimeout(() => { btn.textContent = '📋 コピー'; }, 2000);
+  });
 }
 
 // ===== MINUTES =====
