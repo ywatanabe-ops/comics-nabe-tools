@@ -338,7 +338,8 @@ ${hint}
       })
     });
     const data = await res.json();
-    if (!data.content || data.error) break;
+    if (data.error) return { company: `APIエラー: ${data.error.message || data.error.type}`, position: '-', website: '', confidence: 'low', source: '' };
+    if (!data.content) break;
 
     // サーバーサイドツール(web_search)はtool_resultブロックがcontentに含まれる
     const assistantContent = data.content.filter(b => b.type !== 'tool_result');
@@ -396,8 +397,8 @@ function extractJson(text) {
     const pm = text.match(/"position"\s*:\s*"([^"]+)"/);
     const wm = text.match(/"website"\s*:\s*"([^"]+)"/);
     const fm = text.match(/"confidence"\s*:\s*"([^"]+)"/);
-    if (cm && cm[1] !== '不明' && cm[1] !== '情報なし') {
-      return { company: cm[1], position: pm?pm[1]:'-', website: wm?wm[1]:'', confidence: fm?fm[1]:'medium', source: '自動抽出' };
+    if (cm) {
+      return { company: cm[1], position: pm?pm[1]:'-', website: wm?wm[1]:'', confidence: fm?fm[1]:'low', source: '自動抽出' };
     }
   } catch {}
   return { company: '情報なし', position: '-', website: '', confidence: 'low', source: '' };
