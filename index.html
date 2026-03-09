@@ -273,25 +273,18 @@ async function researchPerson(apiKey, name, url) {
     fbUsername = fm ? fm[1] : '';
   }
   const hint = url.startsWith('http')
-    ? `Facebook URL: ${url}` + (fbUsername && !fbUsername.startsWith('profile') ? `\nFacebookユーザー名: ${fbUsername}` : '')
-    : (url ? `所属会社のヒント: ${url}` : '');
+    ? `Facebook URL: ${url}` + (fbUsername && !fbUsername.startsWith('profile') ? ` (ユーザー名: ${fbUsername})` : '')
+    : (url ? `所属会社: ${url}` : '');
 
-  const sysPrompt = `あなたは企業調査の専門家です。必ずWeb検索を使って人物の勤め先・役職を調べてください。
-最終回答は必ず以下のJSON形式のみで返してください（説明文不要）:
-{"company":"会社名","position":"役職","website":"会社公式HPのURL","confidence":"high/medium/low","source":"情報源"}
-情報が見つからない場合も: {"company":"不明","position":"不明","website":"","confidence":"low","source":"情報なし"}`;
+  const userPrompt = `以下の人物の勤め先・役職をWeb検索で調べてください。
 
-  const userPrompt = `以下の人物を調べてください。
 氏名: ${name}
-${hint ? hint : ''}
+${hint}
 
-【必須】以下の順で複数回検索してください:
-1. "${name} 会社 役職"
-2. "${name} LinkedIn"
-3. "${name} 代表取締役 OR 取締役 OR 執行役員 OR 部長 OR マネージャー"
-${fbUsername && !fbUsername.startsWith('profile') ? `4. "${fbUsername}" OR "${name} Facebook"` : ''}
+複数回検索して最新情報を取得し、最後に必ず以下のJSON形式のみで回答してください:
+{"company":"会社名","position":"役職","website":"会社公式HPのURL","confidence":"high/medium/low","source":"情報源URL"}
 
-検索結果からJSON形式で回答してください。`;
+情報が不明な場合: {"company":"不明","position":"不明","website":"","confidence":"low","source":""}`;
 
   const headers = {
     'Content-Type': 'application/json',
@@ -299,55 +292,79 @@ ${fbUsername && !fbUsername.startsWith('profile') ? `4. "${fbUsername}" OR "${na
     'anthropic-version': '2023-06-01',
     'anthropic-dangerous-direct-browser-access': 'true'
   };
-  const tools = [{ type: 'web_search_20250305', name: 'web_search' }];
 
-  // エージェントループ（最大5ターン）
+  // ループ処理（web_searchはサーバーサイド実行、tool_resultを正しく返す）
   let messages = [{ role: 'user', content: userPrompt }];
-  for (let turn = 0; turn < 5; turn++) {
+  for (let turn = 0; turn < 6; turn++) {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers,
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 3000,
-        system: sysPrompt,
-        tools,
+        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
         messages
       })
     });
     const data = await res.json();
-    if (!data.content) break;
+    if (!data.content || data.error) break;
 
-    // アシスタントの返答をmessagesに追加
     messages.push({ role: 'assistant', content: data.content });
 
-    // stop_reason が end_turn → 最終テキストからJSONを抽出
     if (data.stop_reason === 'end_turn') {
-      const allText = data.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
-      try {
-        const m = allText.match(/\{[^{}]*"company"[^{}]*\}/);
-        if (m) { try { const p = JSON.parse(m[0]); if (p.company) return p; } catch(e2) {} }
-        const cm = allText.match(/"company"\s*:\s*"([^"]+)"/);
-        const pm = allText.match(/"position"\s*:\s*"([^"]+)"/);
-        const wm = allText.match(/"website"\s*:\s*"([^"]+)"/);
-        const fm = allText.match(/"confidence"\s*:\s*"([^"]+)"/);
-        if (cm) return { company: cm[1], position: pm?pm[1]:'-', website: wm?wm[1]:'', confidence: fm?fm[1]:'medium', source: '自動抽出' };
-      } catch {}
-      break;
+      // 全コンテンツから文字列を集める
+      const allText = data.content
+        .map(b => {
+          if (b.type === 'text') return b.text;
+          if (b.type === 'tool_result' && b.content) return JSON.stringify(b.content);
+          return '';
+        }).join('\n');
+      return extractJson(allText);
     }
 
-    // stop_reason が tool_use → 検索結果をmessagesに追加して次のターンへ
     if (data.stop_reason === 'tool_use') {
-      const toolResults = data.content
-        .filter(b => b.type === 'tool_use')
-        .map(b => ({ type: 'tool_result', tool_use_id: b.id, content: b.type === 'tool_use' ? (b.content || '検索完了') : '' }));
-      if (toolResults.length > 0) {
-        messages.push({ role: 'user', content: toolResults });
-      }
+      // サーバーサイドツールの結果はcontentに含まれている
+      const toolUseBlocks = data.content.filter(b => b.type === 'tool_use');
+      const toolResults = toolUseBlocks.map(b => ({
+        type: 'tool_result',
+        tool_use_id: b.id,
+        content: b.content ? (typeof b.content === 'string' ? b.content : JSON.stringify(b.content)) : '検索完了'
+      }));
+      messages.push({ role: 'user', content: toolResults });
     } else {
       break;
     }
   }
+  return { company: '情報なし', position: '-', website: '', confidence: 'low', source: '' };
+}
+
+function extractJson(text) {
+  try {
+    // JSONブロックを探す
+    const patterns = [
+      /```json\s*([\s\S]*?)```/,
+      /\{[^{}]*"company"[^{}]*\}/,
+      /\{[\s\S]*?"company"[\s\S]*?\}/
+    ];
+    for (const pat of patterns) {
+      const m = text.match(pat);
+      if (m) {
+        const raw = m[1] || m[0];
+        try {
+          const p = JSON.parse(raw.trim());
+          if (p && p.company) return p;
+        } catch {}
+      }
+    }
+    // キー別抽出
+    const cm = text.match(/"company"\s*:\s*"([^"]+)"/);
+    const pm = text.match(/"position"\s*:\s*"([^"]+)"/);
+    const wm = text.match(/"website"\s*:\s*"([^"]+)"/);
+    const fm = text.match(/"confidence"\s*:\s*"([^"]+)"/);
+    if (cm && cm[1] !== '不明' && cm[1] !== '情報なし') {
+      return { company: cm[1], position: pm?pm[1]:'-', website: wm?wm[1]:'', confidence: fm?fm[1]:'medium', source: '自動抽出' };
+    }
+  } catch {}
   return { company: '情報なし', position: '-', website: '', confidence: 'low', source: '' };
 }
 
