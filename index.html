@@ -137,6 +137,13 @@
     <p>氏名＋Facebook URLのリストを貼り付けてAI調査 → CSV出力</p>
     <label class="field">入力リスト（1行1人 / タブ or カンマ区切り）</label>
     <textarea id="researchInput" placeholder="山田太郎&#9;https://www.facebook.com/yamada.taro&#10;佐藤花子&#9;マーケティングエンジン株式会社&#10;鈴木一郎&#9;（URLも会社名もなし）"></textarea>
+    <div style="margin-top:8px;display:flex;align-items:center;gap:10px;">
+      <label style="display:inline-flex;align-items:center;gap:6px;background:#0f172a;border:1px solid #475569;border-radius:8px;padding:6px 12px;cursor:pointer;font-size:12px;color:#94a3b8;">
+        📂 CSVファイルを読み込む
+        <input type="file" id="csvFileInput" accept=".csv" style="display:none" onchange="loadCSV(event)">
+      </label>
+      <span id="csvFileName" style="font-size:12px;color:#64748b;"></span>
+    </div>
     <div id="researchError" class="error"></div>
     <div class="btn-row">
       <button class="btn btn-primary" id="btnResearchStart" onclick="runResearch()">▶ 勤め先・役職を調査</button>
@@ -251,6 +258,24 @@ function switchTab(name) {
   document.getElementById('page-' + name).classList.add('active');
 }
 
+// ===== CSV LOAD =====
+function loadCSV(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  document.getElementById('csvFileName').textContent = file.name;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const text = e.target.result.replace(/^\uFEFF/, ''); // BOM除去
+    const lines = text.trim().split(/\r?\n/).filter(Boolean);
+    // ヘッダー行スキップ（氏名/名前/nameなどで始まる場合）
+    const firstCell = lines[0].split(/,|\t/)[0].trim().toLowerCase();
+    const isHeader = ['氏名','名前','name','ふりがな'].includes(firstCell);
+    const dataLines = isHeader ? lines.slice(1) : lines;
+    document.getElementById('researchInput').value = dataLines.join('\n');
+  };
+  reader.readAsText(file, 'UTF-8');
+}
+
 // ===== RESEARCH =====
 let researchAborted = false;
 let researchResults = [];
@@ -276,10 +301,16 @@ async function researchPerson(apiKey, name, url) {
     ? `Facebook URL: ${url}` + (fbUsername && !fbUsername.startsWith('profile') ? ` (ユーザー名: ${fbUsername})` : '')
     : (url ? `所属会社: ${url}` : '');
 
-  const userPrompt = `以下の人物の勤め先・役職をWeb検索で調べてください。
+  const userPrompt = `以下の人物の勤め先・役職を調べてください。以下の順で検索してください：
 
 氏名: ${name}
 ${hint}
+
+【検索手順】
+1. "${name} 勤務先 役職" で検索
+2. "${name} Facebook" でGoogle検索（公開されているFacebook情報をGoogleキャッシュ経由で確認）${fbUsername ? `\n3. Facebook ユーザー名 "${fbUsername}" で検索` : ''}
+4. "${name} LinkedIn" で検索
+5. "${name} 会社名" で検索
 
 複数回検索して最新情報を取得し、最後に必ず以下のJSON形式のみで回答してください:
 {"company":"会社名","position":"役職","website":"会社公式HPのURL","confidence":"high/medium/low","source":"情報源URL"}
