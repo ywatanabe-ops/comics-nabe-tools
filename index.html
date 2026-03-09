@@ -259,7 +259,7 @@ async function researchPerson(apiKey, name, url) {
   const prompt = `あなたは企業調査の専門家です。以下の人物の【最新の勤め先】と【役職】をWeb検索で調べてください。\n\n氏名: ${name}\nFacebook URL: ${url || '不明'}\n\n必ずWeb検索を使って最新情報を取得し、以下のJSON形式のみで回答してください（前後の文章は一切不要）:\n{"company": "会社名", "position": "役職", "confidence": "high/medium/low", "source": "情報源の説明"}\n\n情報が見つからない場合: {"company": "不明", "position": "不明", "confidence": "low", "source": "情報なし"}`;
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+    headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
     body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 1000,
       tools: [{ type: 'web_search_20250305', name: 'web_search' }],
       messages: [{ role: 'user', content: prompt }] })
@@ -392,7 +392,7 @@ ${transcript}`;
   try {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
       body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 2000,
         messages: [{ role: 'user', content: prompt }] })
     });
