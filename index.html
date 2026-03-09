@@ -155,7 +155,7 @@
     <div class="overflow">
       <table>
         <thead><tr>
-          <th>氏名</th><th>Facebook URL</th><th>勤め先</th><th>役職</th><th>確信度</th>
+          <th>氏名</th><th>Facebook URL</th><th>勤め先</th><th>役職</th><th>会社HP</th><th>確信度</th>
         </tr></thead>
         <tbody id="researchBody"></tbody>
       </table>
@@ -267,21 +267,33 @@ function parseResearchInput(text) {
 }
 
 async function researchPerson(apiKey, name, url) {
-  const hint = url.startsWith('http') ? `Facebook URL: ${url}` : (url ? `所属会社のヒント: ${url}` : '追加情報なし');
-  const prompt = `あなたは企業調査の専門家です。以下の人物の【最新の勤め先】と【役職】をWeb検索で調べてください。
+  let fbUsername = '';
+  if (url && url.includes('facebook.com')) {
+    const fm = url.match(/facebook\.com\/(?:profile\.php\?id=)?([\w.]+)/);
+    fbUsername = fm ? fm[1] : '';
+  }
+  const hint = url.startsWith('http')
+    ? `Facebook URL: ${url}` + (fbUsername && !fbUsername.startsWith('profile') ? `\nFacebookユーザー名: ${fbUsername}` : '')
+    : (url ? `所属会社のヒント: ${url}` : '追加情報なし');
+
+  const prompt = `あなたは企業調査の専門家です。以下の人物の【最新の勤め先】と【役職】をWeb検索で徹底的に調べてください。
 
 氏名: ${name}
 ${hint}
 
-調査手順：
-1. 氏名でGoogle検索し、LinkedIn・会社HP・ニュース等から最新情報を取得
-2. Facebook URLがある場合はプロフィール情報も参考にする
-3. 会社名ヒントがある場合はその会社での役職を重点的に調査
+【調査手順】必ず複数回検索してください：
+1. "${name} 会社 役職" で検索
+2. "${name} LinkedIn" で検索
+3. "${name} 代表 社長 取締役 執行役員 部長" など役職キーワードで検索
+4. Facebookユーザー名があれば "${fbUsername || name} Facebook" でも検索
+5. Facebook URLがある場合は "site:facebook.com ${fbUsername || name}" で検索してGoogleキャッシュから公開情報を取得
+6. 会社HP・LinkedIn・ニュース・プレスリリースから最新情報を取得
+7. 取得したFacebook URLに直接アクセスして公開プロフィール情報も確認する
 
 以下のJSON形式のみで回答してください（前後の文章は一切不要）:
-{"company": "会社名", "position": "役職", "confidence": "high/medium/low", "source": "情報源の説明"}
+{"company": "会社名", "position": "役職", "website": "会社の公式HPのURL", "confidence": "high/medium/low", "source": "情報源の説明"}
 
-情報が見つからない場合: {"company": "不明", "position": "不明", "confidence": "low", "source": "情報なし"}`;
+情報が見つからない場合: {"company": "不明", "position": "不明", "website": "", "confidence": "low", "source": "情報なし"}`;
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
@@ -334,7 +346,7 @@ async function runResearch() {
     const tbody = document.getElementById('researchBody');
     const tr = document.createElement('tr');
     tr.id = `rrow-${i}`;
-    tr.innerHTML = `<td class="name">${name}</td><td>${url?`<a href="${url}" target="_blank">🔗 開く</a>`:'-'}</td><td class="loading" id="rc-${i}">⏳ 調査中...</td><td id="rp-${i}">-</td><td id="rf-${i}"></td>`;
+    tr.innerHTML = `<td class="name">${name}</td><td>${url?`<a href="${url}" target="_blank">🔗 開く</a>`:'-'}</td><td class="loading" id="rc-${i}">⏳ 調査中...</td><td id="rp-${i}">-</td><td id="rw-${i}">-</td><td id="rf-${i}"></td>`;
     tbody.appendChild(tr);
     document.getElementById('researchProgressFill').style.width = `${(i/people.length)*100}%`;
     document.getElementById('researchProgressText').textContent = `調査中... ${i+1} / ${people.length} 件`;
@@ -345,6 +357,7 @@ async function runResearch() {
       document.getElementById(`rc-${i}`).textContent = r.company;
       document.getElementById(`rc-${i}`).className = '';
       document.getElementById(`rp-${i}`).textContent = r.position;
+      document.getElementById(`rw-${i}`).innerHTML = r.website ? `<a href="${r.website}" target="_blank">🌐 開く</a>` : '-';
       document.getElementById(`rf-${i}`).innerHTML = badgeHtml(r.confidence);
     } catch(e) {
       researchResults.push({ name, url, company: 'エラー: ' + e.message, position: '-', confidence: 'low', source: e.message });
@@ -368,8 +381,8 @@ function stopResearch() {
 }
 
 function exportCSV() {
-  const header = ['氏名','Facebook URL','勤め先','役職','確信度','情報源'];
-  const rows = researchResults.map(r => [r.name, r.url, r.company, r.position,
+  const header = ['氏名','Facebook URL','勤め先','役職','会社HP','確信度','情報源'];
+  const rows = researchResults.map(r => [r.name, r.url, r.company, r.position, r.website||'',
     r.confidence==='high'?'高':r.confidence==='medium'?'中':'低', r.source||'']);
   const csv = [header,...rows].map(r => r.map(c => `"${(c||'').replace(/"/g,'""')}"`).join(',')).join('\n');
   const blob = new Blob(['\uFEFF'+csv], { type: 'text/csv;charset=utf-8' });
@@ -399,19 +412,24 @@ async function runBio() {
   for (let i = 0; i < people.length; i++) {
     const { name, url } = people[i];
     const hint = url.startsWith('http') ? `Facebook URL: ${url}` : (url ? `所属会社: ${url}` : '');
-    const prompt = `以下の人物について、Web検索で公開情報を調べて、日本語で「他己紹介文」を作成してください。
+    const prompt = `以下の人物について、Web検索で公開情報を調べて、以下のフォーマットで他己紹介を作成してください。
 
 氏名: ${name}
 ${hint}
 
-【他己紹介文の要件】
-- 200〜300文字程度
-- 勤め先・役職・経歴・専門分野・実績などを含める
-- 自然で読みやすい紹介文にする
-- 「〇〇さんは〜」という書き出しで始める
-- 情報が少ない場合は分かる範囲で書く
+【出力フォーマット】
+{氏名}様は、{会社名}の{役職}です。
 
-紹介文のテキストのみ返してください（説明文は不要）。`;
+■ 経歴概要
+（前職・在籍期間・役職・チーム規模など）
+
+■ 役割と専門性
+（現職での担当領域・専門スキル・出身地・学歴など）
+
+■ 会社情報
+（会社の設立年・従業員数・本社所在地・事業内容・代表者名など）
+
+情報が見つからない項目は「情報なし」と記載してください。フォーマット通りに出力してください。`;
 
     try {
       const res = await fetch('https://api.anthropic.com/v1/messages', {
