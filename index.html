@@ -309,28 +309,32 @@ ${hint}
     const data = await res.json();
     if (!data.content || data.error) break;
 
-    messages.push({ role: 'assistant', content: data.content });
+    // サーバーサイドツール(web_search)はtool_resultブロックがcontentに含まれる
+    const assistantContent = data.content.filter(b => b.type !== 'tool_result');
+    const serverToolResults = data.content.filter(b => b.type === 'tool_result');
+    messages.push({ role: 'assistant', content: assistantContent });
 
     if (data.stop_reason === 'end_turn') {
-      // 全コンテンツから文字列を集める
       const allText = data.content
         .map(b => {
           if (b.type === 'text') return b.text;
-          if (b.type === 'tool_result' && b.content) return JSON.stringify(b.content);
+          if (b.type === 'tool_result') return typeof b.content === 'string' ? b.content : JSON.stringify(b.content);
           return '';
         }).join('\n');
       return extractJson(allText);
     }
 
     if (data.stop_reason === 'tool_use') {
-      // サーバーサイドツールの結果はcontentに含まれている
-      const toolUseBlocks = data.content.filter(b => b.type === 'tool_use');
-      const toolResults = toolUseBlocks.map(b => ({
-        type: 'tool_result',
-        tool_use_id: b.id,
-        content: b.content ? (typeof b.content === 'string' ? b.content : JSON.stringify(b.content)) : '検索完了'
-      }));
-      messages.push({ role: 'user', content: toolResults });
+      if (serverToolResults.length > 0) {
+        // サーバーが既に検索結果を提供 → そのまま使用
+        messages.push({ role: 'user', content: serverToolResults });
+      } else {
+        // フォールバック: tool_useブロックに対してtool_resultを返す
+        const toolUseBlocks = assistantContent.filter(b => b.type === 'tool_use');
+        messages.push({ role: 'user', content: toolUseBlocks.map(b => ({
+          type: 'tool_result', tool_use_id: b.id, content: '検索を実行しました'
+        })) });
+      }
     } else {
       break;
     }
