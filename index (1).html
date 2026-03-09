@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>コミクス AIツールランチャー</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+
+  /* Header */
+  .header { background: #1e293b; border-bottom: 1px solid #334155; padding: 16px 24px; display: flex; align-items: center; gap: 12px; }
+  .header h1 { font-size: 18px; font-weight: 800; color: #f8fafc; }
+  .header .logo { width: 32px; height: 32px; background: #3b82f6; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 16px; }
+
+  /* API Key Bar */
+  .apibar { background: #162032; border-bottom: 1px solid #334155; padding: 10px 24px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .apibar label { font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 1px; white-space: nowrap; }
+  .apibar input { background: #0f172a; border: 1px solid #475569; border-radius: 8px; padding: 6px 12px; color: #e2e8f0; font-size: 13px; font-family: monospace; outline: none; width: 320px; }
+  .apibar .btn-sm { border: none; border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 700; cursor: pointer; }
+  .btn-save { background: #3b82f6; color: white; }
+  .btn-clear { background: #475569; color: white; }
+  .api-status { font-size: 11px; color: #64748b; }
+  .api-status.ok { color: #4ade80; }
+
+  /* Tabs */
+  .tabs { display: flex; gap: 0; padding: 0 24px; background: #1e293b; border-bottom: 1px solid #334155; overflow-x: auto; }
+  .tab { padding: 12px 20px; font-size: 13px; font-weight: 600; color: #64748b; cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; transition: all 0.2s; }
+  .tab:hover { color: #94a3b8; }
+  .tab.active { color: #60a5fa; border-bottom-color: #3b82f6; }
+
+  /* Content */
+  .content { padding: 24px; max-width: 960px; margin: 0 auto; }
+  .page { display: none; }
+  .page.active { display: block; }
+
+  /* Cards */
+  .card { background: #1e293b; border-radius: 14px; padding: 20px; border: 1px solid #334155; margin-bottom: 16px; }
+  .card h2 { font-size: 16px; font-weight: 700; color: #f8fafc; margin-bottom: 4px; }
+  .card p { font-size: 13px; color: #94a3b8; margin-bottom: 16px; }
+
+  /* Form */
+  label.field { font-size: 12px; font-weight: 700; color: #94a3b8; display: block; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }
+  textarea { width: 100%; min-height: 120px; background: #0f172a; border: 1px solid #475569; border-radius: 10px; padding: 12px; color: #e2e8f0; font-size: 13px; font-family: monospace; resize: vertical; outline: none; }
+  .btn-row { display: flex; gap: 10px; margin-top: 14px; align-items: center; flex-wrap: wrap; }
+  button.btn { border: none; border-radius: 10px; padding: 10px 22px; font-size: 14px; font-weight: 700; cursor: pointer; transition: background 0.2s; }
+  .btn-primary { background: #3b82f6; color: white; }
+  .btn-primary:disabled { background: #334155; cursor: not-allowed; }
+  .btn-danger { background: #ef4444; color: white; }
+  .btn-success { background: #16a34a; color: white; }
+  .progress-bar { margin-top: 12px; background: #0f172a; border-radius: 99px; height: 6px; overflow: hidden; }
+  .progress-fill { height: 100%; background: #3b82f6; border-radius: 99px; transition: width 0.4s; width: 0%; }
+  .error { color: #f87171; font-size: 12px; margin-top: 6px; }
+  .prog-text { font-size: 12px; color: #94a3b8; margin-top: 6px; }
+
+  /* Table */
+  .overflow { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 600px; }
+  th { padding: 8px 12px; text-align: left; color: #64748b; font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; border-bottom: 1px solid #334155; white-space: nowrap; }
+  td { padding: 10px 12px; border-bottom: 1px solid #1e293b; color: #e2e8f0; }
+  td.name { font-weight: 600; color: #f1f5f9; }
+  td.loading { color: #3b82f6; }
+  a { color: #60a5fa; font-size: 12px; }
+  .badge { padding: 1px 8px; border-radius: 99px; font-size: 11px; font-weight: 700; }
+  .badge-high { background: #bbf7d0; color: #166534; }
+  .badge-medium { background: #fef08a; color: #854d0e; }
+  .badge-low { background: #fecaca; color: #991b1b; }
+
+  /* Minutes Tool */
+  .flow { display: flex; flex-direction: column; gap: 10px; }
+  .flow-step { display: flex; align-items: flex-start; gap: 12px; background: #0f172a; border-radius: 10px; padding: 14px; }
+  .step-num { width: 28px; height: 28px; background: #3b82f6; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 800; flex-shrink: 0; }
+  .step-body h3 { font-size: 13px; font-weight: 700; color: #f1f5f9; margin-bottom: 2px; }
+  .step-body p { font-size: 12px; color: #64748b; }
+  .tag { display: inline-block; background: #1e293b; border: 1px solid #334155; border-radius: 6px; padding: 2px 8px; font-size: 11px; color: #94a3b8; margin: 2px 2px 0 0; }
+  .minutes-area { width: 100%; min-height: 200px; background: #0f172a; border: 1px solid #475569; border-radius: 10px; padding: 12px; color: #e2e8f0; font-size: 13px; font-family: monospace; resize: vertical; outline: none; }
+  .result-box { background: #0f172a; border-radius: 10px; padding: 16px; border: 1px solid #475569; white-space: pre-wrap; font-size: 13px; line-height: 1.7; min-height: 100px; color: #e2e8f0; }
+
+  /* Home */
+  .tool-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
+  .tool-card { background: #1e293b; border-radius: 14px; padding: 20px; border: 1px solid #334155; cursor: pointer; transition: border-color 0.2s, transform 0.15s; }
+  .tool-card:hover { border-color: #3b82f6; transform: translateY(-2px); }
+  .tool-card .icon { font-size: 28px; margin-bottom: 10px; }
+  .tool-card h3 { font-size: 14px; font-weight: 700; color: #f1f5f9; margin-bottom: 4px; }
+  .tool-card p { font-size: 12px; color: #64748b; }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <div class="logo">🚀</div>
+  <h1>コミクス AIツールランチャー</h1>
+</div>
+
+<!-- API Key Bar -->
+<div class="apibar">
+  <label>APIキー</label>
+  <input type="password" id="globalApiKey" placeholder="sk-ant-..." />
+  <button class="btn-sm btn-save" onclick="saveApiKey()">💾 保存</button>
+  <button class="btn-sm btn-clear" onclick="clearApiKey()">🗑</button>
+  <span class="api-status" id="apiStatus">未保存</span>
+</div>
+
+<!-- Tabs -->
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('home')">🏠 ホーム</div>
+  <div class="tab" onclick="switchTab('research')">🔍 勤め先・役職リサーチ</div>
+  <div class="tab" onclick="switchTab('minutes')">📝 議事録自動生成</div>
+</div>
+
+<!-- ============ HOME ============ -->
+<div class="content">
+<div class="page active" id="page-home">
+  <div class="card">
+    <h2>👋 ようこそ</h2>
+    <p>上のAPIキーを一度入力・保存すれば、全ツールで共通利用できます。</p>
+    <div class="tool-grid">
+      <div class="tool-card" onclick="switchTab('research')">
+        <div class="icon">🔍</div>
+        <h3>勤め先・役職リサーチ</h3>
+        <p>氏名＋FacebookURLのリストから最新の勤め先・役職をAIが自動調査。CSV出力対応。</p>
+      </div>
+      <div class="tool-card" onclick="switchTab('minutes')">
+        <div class="icon">📝</div>
+        <h3>議事録自動生成</h3>
+        <p>Zoom文字起こしテキストを貼り付けるだけで構造化された議事録を自動生成。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ RESEARCH ============ -->
+<div class="page" id="page-research">
+  <div class="card">
+    <h2>🔍 勤め先・役職リサーチ</h2>
+    <p>氏名＋Facebook URLのリストを貼り付けてAI調査 → CSV出力</p>
+    <label class="field">入力リスト（1行1人 / タブ or カンマ区切り）</label>
+    <textarea id="researchInput" placeholder="山田太郎&#9;https://www.facebook.com/yamada.taro&#10;佐藤花子&#9;マーケティングエンジン株式会社&#10;鈴木一郎&#9;（URLも会社名もなし）"></textarea>
+    <div id="researchError" class="error"></div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btnResearchStart" onclick="runResearch()">▶ 勤め先・役職を調査</button>
+      <button class="btn" style="background:#7c3aed;color:white;" id="btnBioStart" onclick="runBio()">👤 他己紹介を生成</button>
+      <button class="btn btn-danger" id="btnResearchStop" style="display:none" onclick="stopResearch()">⏹ 停止</button>
+      <button class="btn btn-success" id="btnResearchExport" style="display:none" onclick="exportCSV()">📥 CSV出力</button>
+    </div>
+    <div class="progress-bar" id="researchProgressBar" style="display:none">
+      <div class="progress-fill" id="researchProgressFill"></div>
+    </div>
+    <div class="prog-text" id="researchProgressText"></div>
+  </div>
+
+  <div class="card" id="researchResultsCard" style="display:none">
+    <div id="researchSummary" style="font-size:13px;color:#94a3b8;margin-bottom:14px;"></div>
+    <div class="overflow">
+      <table>
+        <thead><tr>
+          <th>氏名</th><th>Facebook URL</th><th>勤め先</th><th>役職</th><th>確信度</th>
+        </tr></thead>
+        <tbody id="researchBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 他己紹介結果 -->
+  <div class="card" id="bioResultCard" style="display:none">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+      <h2 style="margin:0">👤 他己紹介</h2>
+      <button onclick="copyBio()" id="btnBioCopy" style="background:#7c3aed;color:white;border:none;border-radius:8px;padding:7px 16px;font-size:13px;font-weight:700;cursor:pointer;">📋 コピー</button>
+    </div>
+    <div id="bioLoading" style="color:#3b82f6;font-size:13px;display:none;">⏳ 生成中...</div>
+    <div id="bioResult" style="white-space:pre-wrap;font-size:13px;line-height:1.8;color:#e2e8f0;background:#0f172a;border-radius:10px;padding:16px;border:1px solid #475569;min-height:80px;"></div>
+  </div>
+</div>
+
+<!-- ============ MINUTES ============ -->
+<div class="page" id="page-minutes">
+  <div class="card">
+    <h2>📝 議事録自動生成</h2>
+    <p>Zoomの文字起こしテキストを貼り付けると、構造化された議事録をAIが自動生成します。</p>
+
+    <div style="margin-bottom:16px">
+      <label class="field">MTG種別</label>
+      <select id="mtgType" style="background:#0f172a;border:1px solid #475569;border-radius:8px;padding:8px 12px;color:#e2e8f0;font-size:13px;outline:none;width:100%">
+        <option value="general">生成AI活用支援MTG</option>
+        <option value="advisor">生成AI活用顧問MTG</option>
+        <option value="sales">kyozon商談</option>
+        <option value="other">その他</option>
+      </select>
+    </div>
+
+    <label class="field">文字起こしテキスト</label>
+    <textarea class="minutes-area" id="transcriptInput" placeholder="Zoomの文字起こしをここに貼り付けてください...&#10;&#10;例:&#10;00:00 山田：本日はお時間いただきありがとうございます。&#10;00:05 田中：よろしくお願いします。..."></textarea>
+    <div id="minutesError" class="error"></div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btnMinutesStart" onclick="runMinutes()">📝 議事録生成</button>
+      <button class="btn btn-success" id="btnMinutesCopy" style="display:none" onclick="copyMinutes()">📋 コピー</button>
+    </div>
+    <div class="progress-bar" id="minutesProgressBar" style="display:none">
+      <div class="progress-fill" id="minutesProgressFill" style="animation: pulse 1.5s infinite;"></div>
+    </div>
+  </div>
+
+  <div class="card" id="minutesResultCard" style="display:none">
+    <h2 style="margin-bottom:12px">生成された議事録</h2>
+    <div class="result-box" id="minutesResult"></div>
+  </div>
+</div>
+</div><!-- end .content -->
+
+<style>
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+</style>
+
+<script>
+// ===== API KEY =====
+window.onload = () => {
+  const saved = localStorage.getItem('comics_api_key');
+  if (saved) {
+    document.getElementById('globalApiKey').value = saved;
+    setApiStatus('✅ 保存済み', true);
+  }
+};
+function saveApiKey() {
+  const k = document.getElementById('globalApiKey').value.trim();
+  if (!k) { alert('APIキーを入力してください'); return; }
+  localStorage.setItem('comics_api_key', k);
+  setApiStatus('✅ 保存しました', true);
+}
+function clearApiKey() {
+  localStorage.removeItem('comics_api_key');
+  document.getElementById('globalApiKey').value = '';
+  setApiStatus('削除しました', false);
+}
+function setApiStatus(msg, ok) {
+  const el = document.getElementById('apiStatus');
+  el.textContent = msg;
+  el.className = 'api-status' + (ok ? ' ok' : '');
+}
+function getApiKey() {
+  return document.getElementById('globalApiKey').value.trim();
+}
+
+// ===== TABS =====
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach((t,i) => {
+    const pages = ['home','research','minutes'];
+    t.classList.toggle('active', pages[i] === name);
+  });
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+}
+
+// ===== RESEARCH =====
+let researchAborted = false;
+let researchResults = [];
+
+function parseResearchInput(text) {
+  return text.trim().split('\n').filter(Boolean).map(line => {
+    // URLを先に抽出
+    const urlMatch = line.match(/https?:\/\/\S+/);
+    const url = urlMatch ? urlMatch[0] : '';
+    // URLを除いた残りが名前
+    const name = line.replace(url, '').replace(/[\t,]/g, '').trim();
+    return { name, url };
+  }).filter(r => r.name);
+}
+
+async function researchPerson(apiKey, name, url) {
+  const hint = url.startsWith('http') ? `Facebook URL: ${url}` : (url ? `所属会社のヒント: ${url}` : '追加情報なし');
+  const prompt = `あなたは企業調査の専門家です。以下の人物の【最新の勤め先】と【役職】をWeb検索で調べてください。
+
+氏名: ${name}
+${hint}
+
+調査手順：
+1. 氏名でGoogle検索し、LinkedIn・会社HP・ニュース等から最新情報を取得
+2. Facebook URLがある場合はプロフィール情報も参考にする
+3. 会社名ヒントがある場合はその会社での役職を重点的に調査
+
+以下のJSON形式のみで回答してください（前後の文章は一切不要）:
+{"company": "会社名", "position": "役職", "confidence": "high/medium/low", "source": "情報源の説明"}
+
+情報が見つからない場合: {"company": "不明", "position": "不明", "confidence": "low", "source": "情報なし"}`;
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+    body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 1000,
+      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+      messages: [{ role: 'user', content: prompt }] })
+  });
+  const data = await res.json();
+  const textBlock = data.content?.find(b => b.type === 'text');
+  const raw = textBlock?.text || '';
+  try {
+    const m = raw.match(/\{[\s\S]*\}/);
+    if (m) {
+      try { return JSON.parse(m[0]); } catch(e2) {}
+    }
+    const cm = raw.match(/"company"\s*:\s*"([^"]+)"/);
+    const pm = raw.match(/"position"\s*:\s*"([^"]+)"/);
+    const fm = raw.match(/"confidence"\s*:\s*"([^"]+)"/);
+    if (cm) return { company: cm[1], position: pm ? pm[1] : '-', confidence: fm ? fm[1] : 'low', source: '自動抽出' };
+  } catch {}
+  return { company: '情報なし', position: '-', confidence: 'low', source: raw.slice(0, 150) };
+}
+
+function badgeHtml(c) {
+  const map = { high: ['badge-high','高'], medium: ['badge-medium','中'], low: ['badge-low','低'] };
+  const [cls, label] = map[c] || ['badge-low','-'];
+  return `<span class="badge ${cls}">${label}</span>`;
+}
+
+async function runResearch() {
+  const apiKey = getApiKey();
+  const inputText = document.getElementById('researchInput').value;
+  const errEl = document.getElementById('researchError');
+  if (!apiKey) { errEl.textContent = '上のAPIキーを入力・保存してください'; return; }
+  const people = parseResearchInput(inputText);
+  if (!people.length) { errEl.textContent = 'データを入力してください'; return; }
+  errEl.textContent = '';
+  researchAborted = false;
+  researchResults = [];
+  document.getElementById('btnResearchStart').disabled = true;
+  document.getElementById('btnResearchStop').style.display = '';
+  document.getElementById('btnResearchExport').style.display = 'none';
+  document.getElementById('researchProgressBar').style.display = '';
+  document.getElementById('researchResultsCard').style.display = '';
+  document.getElementById('researchBody').innerHTML = '';
+
+  for (let i = 0; i < people.length; i++) {
+    if (researchAborted) break;
+    const { name, url } = people[i];
+    const tbody = document.getElementById('researchBody');
+    const tr = document.createElement('tr');
+    tr.id = `rrow-${i}`;
+    tr.innerHTML = `<td class="name">${name}</td><td>${url?`<a href="${url}" target="_blank">🔗 開く</a>`:'-'}</td><td class="loading" id="rc-${i}">⏳ 調査中...</td><td id="rp-${i}">-</td><td id="rf-${i}"></td>`;
+    tbody.appendChild(tr);
+    document.getElementById('researchProgressFill').style.width = `${(i/people.length)*100}%`;
+    document.getElementById('researchProgressText').textContent = `調査中... ${i+1} / ${people.length} 件`;
+    document.getElementById('researchSummary').textContent = `結果：${i} / ${people.length} 件完了`;
+    try {
+      const r = await researchPerson(apiKey, name, url);
+      researchResults.push({ name, url, ...r });
+      document.getElementById(`rc-${i}`).textContent = r.company;
+      document.getElementById(`rc-${i}`).className = '';
+      document.getElementById(`rp-${i}`).textContent = r.position;
+      document.getElementById(`rf-${i}`).innerHTML = badgeHtml(r.confidence);
+    } catch(e) {
+      researchResults.push({ name, url, company: 'エラー: ' + e.message, position: '-', confidence: 'low', source: e.message });
+      document.getElementById(`rc-${i}`).textContent = 'エラー: ' + e.message;
+    }
+    if (i < people.length - 1) await new Promise(r => setTimeout(r, 1500));
+  }
+  document.getElementById('researchProgressFill').style.width = '100%';
+  document.getElementById('researchProgressText').textContent = `完了！${researchResults.length} 件`;
+  document.getElementById('researchSummary').textContent = `結果：${researchResults.length} / ${people.length} 件完了`;
+  document.getElementById('btnResearchStart').disabled = false;
+  document.getElementById('btnResearchStop').style.display = 'none';
+  document.getElementById('btnResearchExport').style.display = '';
+}
+
+function stopResearch() {
+  researchAborted = true;
+  document.getElementById('btnResearchStart').disabled = false;
+  document.getElementById('btnResearchStop').style.display = 'none';
+  if (researchResults.length) document.getElementById('btnResearchExport').style.display = '';
+}
+
+function exportCSV() {
+  const header = ['氏名','Facebook URL','勤め先','役職','確信度','情報源'];
+  const rows = researchResults.map(r => [r.name, r.url, r.company, r.position,
+    r.confidence==='high'?'高':r.confidence==='medium'?'中':'低', r.source||'']);
+  const csv = [header,...rows].map(r => r.map(c => `"${(c||'').replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob(['\uFEFF'+csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `企業調査_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+}
+
+// ===== BIO =====
+async function runBio() {
+  const apiKey = getApiKey();
+  const inputText = document.getElementById('researchInput').value;
+  const errEl = document.getElementById('researchError');
+  if (!apiKey) { errEl.textContent = '上のAPIキーを入力・保存してください'; return; }
+  const people = parseResearchInput(inputText);
+  if (!people.length) { errEl.textContent = 'データを入力してください'; return; }
+  errEl.textContent = '';
+
+  document.getElementById('bioResultCard').style.display = '';
+  document.getElementById('bioLoading').style.display = '';
+  document.getElementById('bioResult').textContent = '';
+  document.getElementById('btnBioCopy').style.display = 'none';
+
+  const bioTexts = [];
+
+  for (let i = 0; i < people.length; i++) {
+    const { name, url } = people[i];
+    const hint = url.startsWith('http') ? `Facebook URL: ${url}` : (url ? `所属会社: ${url}` : '');
+    const prompt = `以下の人物について、Web検索で公開情報を調べて、日本語で「他己紹介文」を作成してください。
+
+氏名: ${name}
+${hint}
+
+【他己紹介文の要件】
+- 200〜300文字程度
+- 勤め先・役職・経歴・専門分野・実績などを含める
+- 自然で読みやすい紹介文にする
+- 「〇〇さんは〜」という書き出しで始める
+- 情報が少ない場合は分かる範囲で書く
+
+紹介文のテキストのみ返してください（説明文は不要）。`;
+
+    try {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514', max_tokens: 1000,
+          tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+          messages: [{ role: 'user', content: prompt }]
+        })
+      });
+      const data = await res.json();
+      const text = data.content?.find(b => b.type === 'text')?.text || '情報が見つかりませんでした';
+      bioTexts.push(`■ ${name}
+${text}`);
+    } catch(e) {
+      bioTexts.push(`■ ${name}
+エラー: ${e.message}`);
+    }
+    if (i < people.length - 1) await new Promise(r => setTimeout(r, 1500));
+  }
+
+  document.getElementById('bioLoading').style.display = 'none';
+  document.getElementById('bioResult').textContent = bioTexts.join('
+
+');
+  document.getElementById('btnBioCopy').style.display = '';
+}
+
+function copyBio() {
+  const text = document.getElementById('bioResult').textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('btnBioCopy');
+    btn.textContent = '✅ コピーしました！';
+    setTimeout(() => { btn.textContent = '📋 コピー'; }, 2000);
+  });
+}
+
+// ===== MINUTES =====
+async function runMinutes() {
+  const apiKey = getApiKey();
+  const transcript = document.getElementById('transcriptInput').value.trim();
+  const mtgType = document.getElementById('mtgType').value;
+  const errEl = document.getElementById('minutesError');
+  if (!apiKey) { errEl.textContent = '上のAPIキーを入力・保存してください'; return; }
+  if (!transcript) { errEl.textContent = '文字起こしテキストを入力してください'; return; }
+  errEl.textContent = '';
+
+  const mtgNames = { general:'生成AI活用支援MTG', advisor:'生成AI活用顧問MTG', sales:'kyozon商談', other:'MTG' };
+  const mtgName = mtgNames[mtgType];
+
+  document.getElementById('btnMinutesStart').disabled = true;
+  document.getElementById('btnMinutesCopy').style.display = 'none';
+  document.getElementById('minutesProgressBar').style.display = '';
+  document.getElementById('minutesProgressFill').style.width = '60%';
+  document.getElementById('minutesResultCard').style.display = 'none';
+
+  const prompt = `以下は「${mtgName}」の文字起こしです。この内容から、以下のフォーマットで日本語の議事録を作成してください。
+
+【フォーマット】
+■ 基本情報
+- 日時：（文字起こしから推測、不明の場合は空欄）
+- MTG種別：${mtgName}
+- 参加者：（登場した人名を列挙）
+
+■ サマリー
+（3〜5文で要点をまとめる）
+
+■ 議題と決定事項
+（議論した内容と決まったことを箇条書き）
+
+■ ネクストアクション
+| 担当者 | 内容 | 期限 |
+（表形式で記載、期限が不明な場合は「要確認」）
+
+■ 顧客向け案内文（Facebook Messenger用）
+（議事録の要点と次回アクションを伝える、丁寧でカジュアルな文章）
+
+---
+【文字起こし】
+${transcript}`;
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+      body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 2000,
+        messages: [{ role: 'user', content: prompt }] })
+    });
+    const data = await res.json();
+    const text = data.content?.find(b => b.type === 'text')?.text || 'エラーが発生しました';
+    document.getElementById('minutesResult').textContent = text;
+    document.getElementById('minutesResultCard').style.display = '';
+    document.getElementById('btnMinutesCopy').style.display = '';
+  } catch(e) {
+    errEl.textContent = 'エラー: ' + e.message;
+  }
+
+  document.getElementById('minutesProgressFill').style.width = '100%';
+  setTimeout(() => { document.getElementById('minutesProgressBar').style.display = 'none'; }, 500);
+  document.getElementById('btnMinutesStart').disabled = false;
+}
+
+function copyMinutes() {
+  const text = document.getElementById('minutesResult').textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('btnMinutesCopy');
+    btn.textContent = '✅ コピーしました！';
+    setTimeout(() => { btn.textContent = '📋 コピー'; }, 2000);
+  });
+}
+</script>
+</body>
+</html>
