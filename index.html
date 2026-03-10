@@ -629,7 +629,9 @@ async function runTranscribe() {
   const progText = document.getElementById('minutesProgressText');
   document.getElementById('minutesProgressBar').style.display = '';
   document.getElementById('minutesProgressFill').style.width = '20%';
+  progText.textContent = '処理を開始しています...';
   document.getElementById('btnMinutesStart').disabled = true;
+  progText.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
   try {
     if (minutesFile.name.endsWith('.vtt')) {
@@ -774,8 +776,14 @@ async function runMinutes() {
 
   // ファイルが選択されていれば先に文字起こし
   if (minutesFile && (minutesFile.name.endsWith('.mp4') || minutesFile.name.endsWith('.vtt'))) {
-    await runTranscribe();
-    if (errEl.textContent) return; // 文字起こしエラー時は中断
+    try {
+      await runTranscribe();
+    } catch(e) {
+      errEl.textContent = '文字起こしエラー: ' + e.message;
+      document.getElementById('btnMinutesStart').disabled = false;
+      return;
+    }
+    if (errEl.textContent) return;
   }
 
   const transcript = document.getElementById('transcriptInput').value.trim();
