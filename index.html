@@ -239,7 +239,6 @@
         <input type="file" id="minutesFileInput" accept=".mp4,.vtt,.txt" style="display:none" onchange="onMinutesFileSelect(event)">
       </label>
       <span id="minutesFileName" style="font-size:12px;color:#64748b;"></span>
-      <button class="btn btn-primary" id="btnTranscribe" style="display:none;padding:8px 16px;font-size:13px" onclick="runTranscribe()">🎙 文字起こし</button>
     </div>
 
     <label class="field">文字起こしテキスト（直接貼り付けも可）</label>
@@ -613,7 +612,6 @@ function onMinutesFileSelect(event) {
   minutesFile = event.target.files[0];
   if (!minutesFile) return;
   document.getElementById('minutesFileName').textContent = minutesFile.name;
-  document.getElementById('btnTranscribe').style.display = minutesFile.name.endsWith('.mp4') || minutesFile.name.endsWith('.vtt') ? '' : 'none';
   if (minutesFile.name.endsWith('.txt')) {
     const reader = new FileReader();
     reader.onload = e => { document.getElementById('transcriptInput').value = e.target.result; };
@@ -762,11 +760,18 @@ function parseVTT(text) {
 // ===== MINUTES =====
 async function runMinutes() {
   const apiKey = getApiKey();
-  const transcript = document.getElementById('transcriptInput').value.trim();
   const errEl = document.getElementById('minutesError');
   if (!apiKey) { errEl.textContent = 'Claude APIキーを入力・保存してください'; return; }
-  if (!transcript) { errEl.textContent = '文字起こしテキストを入力してください'; return; }
   errEl.textContent = '';
+
+  // ファイルが選択されていれば先に文字起こし
+  if (minutesFile && (minutesFile.name.endsWith('.mp4') || minutesFile.name.endsWith('.vtt'))) {
+    await runTranscribe();
+    if (errEl.textContent) return; // 文字起こしエラー時は中断
+  }
+
+  const transcript = document.getElementById('transcriptInput').value.trim();
+  if (!transcript) { errEl.textContent = '文字起こしテキストを入力してください'; return; }
 
   const title = document.getElementById('mtgTitle').value || document.getElementById('mtgType').value;
   const date = document.getElementById('mtgDate').value || '（不明）';
@@ -847,6 +852,15 @@ ${transcript}`;
     document.getElementById('minutesResultCard').style.display = '';
     document.getElementById('btnMinutesCopy').style.display = '';
     document.getElementById('minutesProgressText').textContent = '生成完了！';
+    // 文字起こしTXT自動ダウンロード
+    const transcriptForSave = document.getElementById('transcriptInput').value.trim();
+    if (transcriptForSave) {
+      const blob = new Blob([transcriptForSave], { type: 'text/plain;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `文字起こし_${title}_${date}.txt`.replace(/[\\/:*?"<>|]/g, '_');
+      a.click();
+    }
     // 自動Notion保存
     const notionKey = getNotionKey();
     const notionDb = getNotionDb();
