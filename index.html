@@ -663,9 +663,16 @@ async function runTranscribe() {
       const uploadUrl = initRes.headers.get('X-Goog-Upload-URL');
       if (!uploadUrl) throw new Error('アップロードURL取得失敗');
 
-      // Step2: アップロード
-      progText.textContent = 'ファイルアップロード中...';
+      // Step2: アップロード（サイズ表示付き）
+      const fileMB = (minutesFile.size / 1024 / 1024).toFixed(1);
+      progText.textContent = `ファイルアップロード中... (${fileMB}MB) ※大きいファイルは数分かかります`;
       document.getElementById('minutesProgressFill').style.width = '50%';
+      // アップロード中カウンター
+      let uploadSec = 0;
+      const uploadTimer = setInterval(() => {
+        uploadSec++;
+        progText.textContent = `ファイルアップロード中... (${fileMB}MB / ${uploadSec}秒経過)`;
+      }, 1000);
       const uploadRes = await fetch(uploadUrl, {
         method: 'POST',
         headers: {
@@ -675,16 +682,17 @@ async function runTranscribe() {
         },
         body: minutesFile
       });
+      clearInterval(uploadTimer);
       const fileInfo = await uploadRes.json();
       const fileUri = fileInfo.file?.uri;
       if (!fileUri) throw new Error('ファイルURI取得失敗: ' + JSON.stringify(fileInfo));
 
-      // Step3: 処理待ち
-      progText.textContent = 'Geminiが処理中...';
+      // Step3: 処理待ち（秒数カウンター付き）
       document.getElementById('minutesProgressFill').style.width = '65%';
       let fileState = fileInfo.file?.state?.name || fileInfo.file?.state;
       let pollCount = 0;
       while (fileState === 'PROCESSING' && pollCount < 60) {
+        progText.textContent = `Geminiが解析中... (${pollCount * 5}秒経過)`;
         await new Promise(r => setTimeout(r, 5000));
         const pollRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/${fileInfo.file.name}?key=${geminiKey}`);
         const pollData = await pollRes.json();
