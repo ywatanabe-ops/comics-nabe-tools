@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>コミクス AIツールランチャー</title>
+<title>AIツールランチャー</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
@@ -52,7 +52,6 @@
   .progress-fill { height: 100%; background: #3b82f6; border-radius: 99px; transition: width 0.4s; width: 0%; }
   .error { color: #f87171; font-size: 12px; margin-top: 6px; }
   .prog-text { font-size: 12px; color: #94a3b8; margin-top: 6px; }
-
   /* Table */
   .overflow { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 600px; }
@@ -95,11 +94,16 @@
 
 <!-- API Key Bar -->
 <div class="apibar">
-  <label>APIキー</label>
-  <input type="password" id="globalApiKey" placeholder="sk-ant-..." />
+  <label>Claude APIキー</label>
+  <input type="password" id="globalApiKey" placeholder="sk-ant-..." style="width:240px" />
   <button class="btn-sm btn-save" onclick="saveApiKey()">💾 保存</button>
   <button class="btn-sm btn-clear" onclick="clearApiKey()">🗑</button>
   <span class="api-status" id="apiStatus">未保存</span>
+  <label style="margin-left:16px">Gemini APIキー</label>
+  <input type="password" id="geminiApiKey" placeholder="AIza..." style="width:220px" />
+  <button class="btn-sm btn-save" onclick="saveGeminiKey()">💾 保存</button>
+  <button class="btn-sm btn-clear" onclick="clearGeminiKey()">🗑</button>
+  <span class="api-status" id="geminiStatus">未保存</span>
 </div>
 
 <!-- Tabs -->
@@ -184,20 +188,54 @@
 <div class="page" id="page-minutes">
   <div class="card">
     <h2>📝 議事録自動生成</h2>
-    <p>Zoomの文字起こしテキストを貼り付けると、構造化された議事録をAIが自動生成します。</p>
+    <p>MP4/VTTをアップロードするか、文字起こしテキストを貼り付けて議事録を生成します。</p>
 
-    <div style="margin-bottom:16px">
-      <label class="field">MTG種別</label>
-      <select id="mtgType" style="background:#0f172a;border:1px solid #475569;border-radius:8px;padding:8px 12px;color:#e2e8f0;font-size:13px;outline:none;width:100%">
-        <option value="general">生成AI活用支援MTG</option>
-        <option value="advisor">生成AI活用顧問MTG</option>
-        <option value="sales">kyozon商談</option>
-        <option value="other">その他</option>
-      </select>
+    <!-- 会議情報 -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+      <div>
+        <label class="field">会議名</label>
+        <input id="mtgTitle" type="text" placeholder="例：【定例】顧問契約／株式会社〇〇" style="width:100%;background:#0f172a;border:1px solid #475569;border-radius:8px;padding:8px 12px;color:#e2e8f0;font-size:13px;outline:none">
+      </div>
+      <div>
+        <label class="field">MTG種別</label>
+        <select id="mtgType" style="width:100%;background:#0f172a;border:1px solid #475569;border-radius:8px;padding:8px 12px;color:#e2e8f0;font-size:13px;outline:none">
+          <option value="生成AI活用支援MTG">生成AI活用支援MTG</option>
+          <option value="生成AI活用顧問MTG">生成AI活用顧問MTG</option>
+          <option value="kyozon商談">kyozon商談</option>
+          <option value="その他">その他</option>
+        </select>
+      </div>
+      <div>
+        <label class="field">日付</label>
+        <input id="mtgDate" type="text" placeholder="例：3月10日（月曜日）" style="width:100%;background:#0f172a;border:1px solid #475569;border-radius:8px;padding:8px 12px;color:#e2e8f0;font-size:13px;outline:none">
+      </div>
+      <div>
+        <label class="field">時間</label>
+        <input id="mtgTime" type="text" placeholder="例：15:00〜15:40" style="width:100%;background:#0f172a;border:1px solid #475569;border-radius:8px;padding:8px 12px;color:#e2e8f0;font-size:13px;outline:none">
+      </div>
+      <div>
+        <label class="field">先方参加者</label>
+        <input id="mtgOther" type="text" placeholder="例：田中、鈴木" style="width:100%;background:#0f172a;border:1px solid #475569;border-radius:8px;padding:8px 12px;color:#e2e8f0;font-size:13px;outline:none">
+      </div>
+      <div>
+        <label class="field">弊社参加者</label>
+        <input id="mtgOur" type="text" placeholder="例：渡辺、朝隈" style="width:100%;background:#0f172a;border:1px solid #475569;border-radius:8px;padding:8px 12px;color:#e2e8f0;font-size:13px;outline:none">
+      </div>
     </div>
 
-    <label class="field">文字起こしテキスト</label>
-    <textarea class="minutes-area" id="transcriptInput" placeholder="Zoomの文字起こしをここに貼り付けてください...&#10;&#10;例:&#10;00:00 山田：本日はお時間いただきありがとうございます。&#10;00:05 田中：よろしくお願いします。..."></textarea>
+    <!-- ファイルアップロード -->
+    <label class="field">MP4 / VTT ファイル（Gemini APIキーが必要）</label>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+      <label style="display:inline-flex;align-items:center;gap:6px;background:#0f172a;border:1px solid #475569;border-radius:8px;padding:8px 14px;cursor:pointer;font-size:13px;color:#94a3b8;">
+        📎 ファイルを選択
+        <input type="file" id="minutesFileInput" accept=".mp4,.vtt,.txt" style="display:none" onchange="onMinutesFileSelect(event)">
+      </label>
+      <span id="minutesFileName" style="font-size:12px;color:#64748b;"></span>
+      <button class="btn btn-primary" id="btnTranscribe" style="display:none;padding:8px 16px;font-size:13px" onclick="runTranscribe()">🎙 文字起こし</button>
+    </div>
+
+    <label class="field">文字起こしテキスト（直接貼り付けも可）</label>
+    <textarea class="minutes-area" id="transcriptInput" placeholder="Zoomの文字起こしをここに貼り付けてください...&#10;または上のファイルアップロードで自動入力されます。"></textarea>
     <div id="minutesError" class="error"></div>
     <div class="btn-row">
       <button class="btn btn-primary" id="btnMinutesStart" onclick="runMinutes()">📝 議事録生成</button>
@@ -206,6 +244,7 @@
     <div class="progress-bar" id="minutesProgressBar" style="display:none">
       <div class="progress-fill" id="minutesProgressFill" style="animation: pulse 1.5s infinite;"></div>
     </div>
+    <div class="prog-text" id="minutesProgressText"></div>
   </div>
 
   <div class="card" id="minutesResultCard" style="display:none">
@@ -223,10 +262,9 @@
 // ===== API KEY =====
 window.onload = () => {
   const saved = localStorage.getItem('comics_api_key');
-  if (saved) {
-    document.getElementById('globalApiKey').value = saved;
-    setApiStatus('✅ 保存済み', true);
-  }
+  if (saved) { document.getElementById('globalApiKey').value = saved; setApiStatus('✅ 保存済み', true); }
+  const savedG = localStorage.getItem('comics_gemini_key');
+  if (savedG) { document.getElementById('geminiApiKey').value = savedG; setGeminiStatus('✅ 保存済み', true); }
 };
 function saveApiKey() {
   const k = document.getElementById('globalApiKey').value.trim();
@@ -241,12 +279,26 @@ function clearApiKey() {
 }
 function setApiStatus(msg, ok) {
   const el = document.getElementById('apiStatus');
-  el.textContent = msg;
-  el.className = 'api-status' + (ok ? ' ok' : '');
+  el.textContent = msg; el.className = 'api-status' + (ok ? ' ok' : '');
 }
-function getApiKey() {
-  return document.getElementById('globalApiKey').value.trim();
+function getApiKey() { return document.getElementById('globalApiKey').value.trim(); }
+
+function saveGeminiKey() {
+  const k = document.getElementById('geminiApiKey').value.trim();
+  if (!k) { alert('Gemini APIキーを入力してください'); return; }
+  localStorage.setItem('comics_gemini_key', k);
+  setGeminiStatus('✅ 保存しました', true);
 }
+function clearGeminiKey() {
+  localStorage.removeItem('comics_gemini_key');
+  document.getElementById('geminiApiKey').value = '';
+  setGeminiStatus('削除しました', false);
+}
+function setGeminiStatus(msg, ok) {
+  const el = document.getElementById('geminiStatus');
+  el.textContent = msg; el.className = 'api-status' + (ok ? ' ok' : '');
+}
+function getGeminiKey() { return document.getElementById('geminiApiKey').value.trim(); }
 
 // ===== TABS =====
 function switchTab(name) {
@@ -324,54 +376,20 @@ ${hint}
     'anthropic-dangerous-direct-browser-access': 'true'
   };
 
-  // ループ処理（web_searchはサーバーサイド実行、tool_resultを正しく返す）
-  let messages = [{ role: 'user', content: userPrompt }];
-  for (let turn = 0; turn < 6; turn++) {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 3000,
-        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-        messages
-      })
-    });
-    const data = await res.json();
-    if (data.error) return { company: `APIエラー: ${data.error.message || data.error.type}`, position: '-', website: '', confidence: 'low', source: '' };
-    if (!data.content) break;
-
-    // サーバーサイドツール(web_search)はtool_resultブロックがcontentに含まれる
-    const assistantContent = data.content.filter(b => b.type !== 'tool_result');
-    const serverToolResults = data.content.filter(b => b.type === 'tool_result');
-    messages.push({ role: 'assistant', content: assistantContent });
-
-    if (data.stop_reason === 'end_turn') {
-      const allText = data.content
-        .map(b => {
-          if (b.type === 'text') return b.text;
-          if (b.type === 'tool_result') return typeof b.content === 'string' ? b.content : JSON.stringify(b.content);
-          return '';
-        }).join('\n');
-      return extractJson(allText);
-    }
-
-    if (data.stop_reason === 'tool_use') {
-      if (serverToolResults.length > 0) {
-        // サーバーが既に検索結果を提供 → そのまま使用
-        messages.push({ role: 'user', content: serverToolResults });
-      } else {
-        // フォールバック: tool_useブロックに対してtool_resultを返す
-        const toolUseBlocks = assistantContent.filter(b => b.type === 'tool_use');
-        messages.push({ role: 'user', content: toolUseBlocks.map(b => ({
-          type: 'tool_result', tool_use_id: b.id, content: '検索を実行しました'
-        })) });
-      }
-    } else {
-      break;
-    }
-  }
-  return { company: '情報なし', position: '-', website: '', confidence: 'low', source: '' };
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 800,
+      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+      messages: [{ role: 'user', content: userPrompt }]
+    })
+  });
+  const data = await res.json();
+  if (data.error) return { company: `APIエラー: ${data.error.message || data.error.type}`, position: '-', website: '', confidence: 'low', source: '' };
+  const allText = (data.content || []).map(b => b.type === 'text' ? b.text : '').join('\n');
+  return extractJson(allText);
 }
 
 function extractJson(text) {
@@ -553,47 +571,229 @@ function copyBio() {
   });
 }
 
+// ===== MINUTES FILE =====
+let minutesFile = null;
+function onMinutesFileSelect(event) {
+  minutesFile = event.target.files[0];
+  if (!minutesFile) return;
+  document.getElementById('minutesFileName').textContent = minutesFile.name;
+  document.getElementById('btnTranscribe').style.display = minutesFile.name.endsWith('.mp4') || minutesFile.name.endsWith('.vtt') ? '' : 'none';
+  if (minutesFile.name.endsWith('.txt')) {
+    const reader = new FileReader();
+    reader.onload = e => { document.getElementById('transcriptInput').value = e.target.result; };
+    reader.readAsText(minutesFile, 'UTF-8');
+  }
+}
+
+async function runTranscribe() {
+  const geminiKey = getGeminiKey();
+  const errEl = document.getElementById('minutesError');
+  if (!geminiKey) { errEl.textContent = 'Gemini APIキーを入力・保存してください'; return; }
+  if (!minutesFile) { errEl.textContent = 'ファイルを選択してください'; return; }
+  errEl.textContent = '';
+
+  const progText = document.getElementById('minutesProgressText');
+  document.getElementById('minutesProgressBar').style.display = '';
+  document.getElementById('minutesProgressFill').style.width = '20%';
+  document.getElementById('btnTranscribe').disabled = true;
+
+  try {
+    if (minutesFile.name.endsWith('.vtt')) {
+      progText.textContent = 'VTTファイルを解析中...';
+      const text = await minutesFile.text();
+      document.getElementById('transcriptInput').value = parseVTT(text);
+      progText.textContent = '文字起こし完了';
+    } else {
+      // MP4: Gemini Files API (resumable upload)
+      progText.textContent = 'Geminiにアップロード中...';
+      document.getElementById('minutesProgressFill').style.width = '30%';
+
+      const title = document.getElementById('mtgTitle').value || '会議';
+      const other = document.getElementById('mtgOther').value || '先方';
+      const our = document.getElementById('mtgOur').value || '弊社';
+      const date = document.getElementById('mtgDate').value || '';
+      const time = document.getElementById('mtgTime').value || '';
+
+      // Step1: 開始
+      const initRes = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${geminiKey}`, {
+        method: 'POST',
+        headers: {
+          'X-Goog-Upload-Protocol': 'resumable',
+          'X-Goog-Upload-Command': 'start',
+          'X-Goog-Upload-Header-Content-Type': 'video/mp4',
+          'X-Goog-Upload-Header-Content-Length': minutesFile.size,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ file: { displayName: minutesFile.name } })
+      });
+      const uploadUrl = initRes.headers.get('X-Goog-Upload-URL');
+      if (!uploadUrl) throw new Error('アップロードURL取得失敗');
+
+      // Step2: アップロード
+      progText.textContent = 'ファイルアップロード中...';
+      document.getElementById('minutesProgressFill').style.width = '50%';
+      const uploadRes = await fetch(uploadUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Length': minutesFile.size,
+          'X-Goog-Upload-Offset': '0',
+          'X-Goog-Upload-Command': 'upload, finalize',
+        },
+        body: minutesFile
+      });
+      const fileInfo = await uploadRes.json();
+      const fileUri = fileInfo.file?.uri;
+      if (!fileUri) throw new Error('ファイルURI取得失敗: ' + JSON.stringify(fileInfo));
+
+      // Step3: 処理待ち
+      progText.textContent = 'Geminiが処理中...';
+      document.getElementById('minutesProgressFill').style.width = '65%';
+      let fileState = fileInfo.file?.state?.name || fileInfo.file?.state;
+      let pollCount = 0;
+      while (fileState === 'PROCESSING' && pollCount < 60) {
+        await new Promise(r => setTimeout(r, 5000));
+        const pollRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/${fileInfo.file.name}?key=${geminiKey}`);
+        const pollData = await pollRes.json();
+        fileState = pollData.state?.name || pollData.state;
+        pollCount++;
+      }
+
+      // Step4: 文字起こし生成
+      progText.textContent = '文字起こし生成中...';
+      document.getElementById('minutesProgressFill').style.width = '80%';
+      const transcribePrompt = `${title}\n${date}${time ? '・' + time : ''}\n先方：${other}\n弊社：${our}\n\n音声ファイルの文字起こしをお願いします。\nフォーマット: [MM:SS] 話者: 発言内容\n話者が変わるたびに明確に区別してください。`;
+
+      const genRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [
+            { fileData: { mimeType: 'video/mp4', fileUri } },
+            { text: transcribePrompt }
+          ]}],
+          generationConfig: { maxOutputTokens: 8192 }
+        })
+      });
+      const genData = await genRes.json();
+      const transcriptText = genData.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!transcriptText) throw new Error('文字起こし失敗: ' + JSON.stringify(genData));
+      document.getElementById('transcriptInput').value = transcriptText;
+      progText.textContent = '文字起こし完了！議事録生成ボタンを押してください。';
+    }
+  } catch(e) {
+    errEl.textContent = 'エラー: ' + e.message;
+    progText.textContent = '';
+  }
+
+  document.getElementById('minutesProgressFill').style.width = '100%';
+  setTimeout(() => { document.getElementById('minutesProgressBar').style.display = 'none'; }, 800);
+  document.getElementById('btnTranscribe').disabled = false;
+}
+
+function parseVTT(text) {
+  const lines = text.split(/\r?\n/);
+  const result = [];
+  let currentSpeaker = null, currentText = [];
+  const tsPattern = new RegExp('^\\d{2}:\\d{2}:\\d{2}\\.\\d{3} -->');
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i].trim();
+    if (!line || line === 'WEBVTT' || /^\d+$/.test(line)) { i++; continue; }
+    if (tsPattern.test(line)) {
+      i++;
+      if (i < lines.length) {
+        const tl = lines[i].trim();
+        const sm = tl.match(/^<v ([^>]+)>(.*)/);
+        if (sm) {
+          const sp = sm[1], tx = sm[2].replace(/<\/v>$/, '').trim();
+          if (sp !== currentSpeaker) {
+            if (currentText.length) result.push(`${currentSpeaker}: ${currentText.join('')}`);
+            currentSpeaker = sp; currentText = [];
+          }
+          currentText.push(tx + ' ');
+        } else {
+          const plain = tl.replace(/<[^>]+>/g, '').trim();
+          if (plain) currentText.push(plain + ' ');
+        }
+      }
+    }
+    i++;
+  }
+  if (currentText.length) result.push(`${currentSpeaker || ''}: ${currentText.join('')}`);
+  return result.join('\n');
+}
+
 // ===== MINUTES =====
 async function runMinutes() {
   const apiKey = getApiKey();
   const transcript = document.getElementById('transcriptInput').value.trim();
-  const mtgType = document.getElementById('mtgType').value;
   const errEl = document.getElementById('minutesError');
-  if (!apiKey) { errEl.textContent = '上のAPIキーを入力・保存してください'; return; }
+  if (!apiKey) { errEl.textContent = 'Claude APIキーを入力・保存してください'; return; }
   if (!transcript) { errEl.textContent = '文字起こしテキストを入力してください'; return; }
   errEl.textContent = '';
 
-  const mtgNames = { general:'生成AI活用支援MTG', advisor:'生成AI活用顧問MTG', sales:'kyozon商談', other:'MTG' };
-  const mtgName = mtgNames[mtgType];
+  const title = document.getElementById('mtgTitle').value || document.getElementById('mtgType').value;
+  const date = document.getElementById('mtgDate').value || '（不明）';
+  const time = document.getElementById('mtgTime').value || '（不明）';
+  const other = document.getElementById('mtgOther').value || '（未入力）';
+  const our = document.getElementById('mtgOur').value || '（未入力）';
 
   document.getElementById('btnMinutesStart').disabled = true;
   document.getElementById('btnMinutesCopy').style.display = 'none';
   document.getElementById('minutesProgressBar').style.display = '';
   document.getElementById('minutesProgressFill').style.width = '60%';
+  document.getElementById('minutesProgressText').textContent = '議事録生成中...';
   document.getElementById('minutesResultCard').style.display = 'none';
 
-  const prompt = `以下は「${mtgName}」の文字起こしです。この内容から、以下のフォーマットで日本語の議事録を作成してください。
+  const prompt = `あなたは議事録作成のエキスパートです。以下の会議情報と文字起こしをもとに、詳細な議事録を作成してください。
 
-【フォーマット】
-■ 基本情報
-- 日時：（文字起こしから推測、不明の場合は空欄）
-- MTG種別：${mtgName}
-- 参加者：（登場した人名を列挙）
+【会議情報】
+- 会議名: ${title}
+- 日時: ${date} ${time}
+- 先方参加者: ${other}
+- 弊社参加者: ${our}
 
-■ サマリー
-（3〜5文で要点をまとめる）
+【出力形式】
+議事録：${title}
 
-■ 議題と決定事項
-（議論した内容と決まったことを箇条書き）
+開催概要
+| 項目 | 内容 |
+|------|------|
+| 日時 | ${date} ${time} |
+| 先方 | ${other} |
+| 弊社 | ${our} |
 
-■ ネクストアクション
-| 担当者 | 内容 | 期限 |
-（表形式で記載、期限が不明な場合は「要確認」）
+サマリー
+（主要なポイントを3〜5個の箇条書きで）
 
-■ 顧客向け案内文（Facebook Messenger用）
+討議内容
+
+[議題1のタイトル]
+（発言・意見・背景・経緯・数値・金額など漏らさず詳細に記載）
+
+決定事項
+（決定に至った理由・背景も含めて記載）
+
+保留・継続検討事項
+（決定に至らなかった事項）
+
+アクションアイテム
+| 担当者 | タスク内容 | 期限 |
+|--------|-----------|------|
+
+次回会議
+- 日時: （言及があれば記載、なければ「未定」）
+
+顧客向け案内文（Facebook Messenger用）
 （議事録の要点と次回アクションを伝える、丁寧でカジュアルな文章）
 
 ---
+【作成ルール】
+- 文字起こしの内容を最初から最後まで省略せずすべて反映してください
+- 金額・数値・日付・企業名・人名など具体的な情報は必ず正確に記載してください
+- 絵文字・Markdown記号（#、**など）は使用しないでください
+- 情報が不足している場合は「要確認」、未定の場合は「TBD」と記載してください
+
 【文字起こし】
 ${transcript}`;
 
@@ -601,14 +801,16 @@ ${transcript}`;
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 2000,
+      body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 8192,
         messages: [{ role: 'user', content: prompt }] })
     });
     const data = await res.json();
+    if (data.error) { errEl.textContent = 'APIエラー: ' + (data.error.message || data.error.type); return; }
     const text = data.content?.find(b => b.type === 'text')?.text || 'エラーが発生しました';
     document.getElementById('minutesResult').textContent = text;
     document.getElementById('minutesResultCard').style.display = '';
     document.getElementById('btnMinutesCopy').style.display = '';
+    document.getElementById('minutesProgressText').textContent = '生成完了！';
   } catch(e) {
     errEl.textContent = 'エラー: ' + e.message;
   }
