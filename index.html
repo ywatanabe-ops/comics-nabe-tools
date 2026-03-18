@@ -974,7 +974,7 @@ async function uploadToNotion(minutesText, title, date, time, other, our) {
   };
 
   try {
-    const createRes = await fetch('https://cors-anywhere.herokuapp.com/https://api.notion.com/v1/pages', {
+    const createRes = await fetch('https://notion-proxy.y-watanabe-502.workers.dev/v1/pages', {
       method: 'POST',
       headers: notionHeaders,
       body: JSON.stringify({
@@ -994,7 +994,7 @@ async function uploadToNotion(minutesText, title, date, time, other, our) {
     while (remaining.length) {
       const batch = remaining.slice(0, 100);
       remaining = remaining.slice(100);
-      await fetch(`https://cors-anywhere.herokuapp.com/https://api.notion.com/v1/blocks/${pageId}/children`, {
+      await fetch(`https://notion-proxy.y-watanabe-502.workers.dev/v1/blocks/${pageId}/children`, {
         method: 'PATCH',
         headers: notionHeaders,
         body: JSON.stringify({ children: batch })
