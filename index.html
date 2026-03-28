@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>C-Autopilot</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
@@ -111,6 +112,11 @@
   <button class="btn-sm btn-save" onclick="saveNotionKeys()">💾 保存</button>
   <button class="btn-sm btn-clear" onclick="clearNotionKeys()">🗑</button>
   <span class="api-status" id="notionStatus">未保存</span>
+  <label style="margin-left:16px">Google Client ID</label>
+  <input type="text" id="googleClientId" placeholder="xxxx.apps.googleusercontent.com" style="width:280px" />
+  <button class="btn-sm btn-save" onclick="saveGoogleClientId()">💾 保存</button>
+  <button class="btn-sm btn-clear" onclick="clearGoogleClientId()">🗑</button>
+  <span class="api-status" id="googleStatus">未保存</span>
 </div>
 
 <!-- Tabs -->
@@ -278,6 +284,8 @@ window.onload = () => {
   const savedD = localStorage.getItem('comics_notion_db');
   if (savedD) document.getElementById('notionDbId').value = savedD;
   if (savedN && savedD) setNotionStatus('✅ 保存済み', true);
+  const savedGc = localStorage.getItem('comics_google_client_id');
+  if (savedGc) { document.getElementById('googleClientId').value = savedGc; setGoogleStatus('✅ 保存済み', true); }
 };
 function saveApiKey() {
   const k = document.getElementById('globalApiKey').value.trim();
@@ -334,6 +342,107 @@ function setNotionStatus(msg, ok) {
 }
 function getNotionKey() { return document.getElementById('notionApiKey').value.trim(); }
 function getNotionDb() { return document.getElementById('notionDbId').value.trim(); }
+
+// ===== GOOGLE CALENDAR =====
+let _googleAccessToken = null;
+
+function saveGoogleClientId() {
+  const id = document.getElementById('googleClientId').value.trim();
+  if (!id) { alert('Google Client IDを入力してください'); return; }
+  localStorage.setItem('comics_google_client_id', id);
+  setGoogleStatus('✅ 保存しました', true);
+}
+function clearGoogleClientId() {
+  localStorage.removeItem('comics_google_client_id');
+  document.getElementById('googleClientId').value = '';
+  _googleAccessToken = null;
+  setGoogleStatus('削除しました', false);
+}
+function setGoogleStatus(msg, ok) {
+  const el = document.getElementById('googleStatus');
+  if (el) { el.textContent = msg; el.className = 'api-status' + (ok ? ' ok' : ''); }
+}
+function getGoogleClientId() {
+  return document.getElementById('googleClientId').value.trim() || localStorage.getItem('comics_google_client_id') || '';
+}
+
+function authorizeGoogle() {
+  return new Promise((resolve, reject) => {
+    const clientId = getGoogleClientId();
+    if (!clientId) { resolve(null); return; }
+    const tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: 'https://www.googleapis.com/auth/calendar.readonly',
+      callback: (resp) => {
+        if (resp.error) { reject(new Error(resp.error)); return; }
+        _googleAccessToken = resp.access_token;
+        resolve(resp.access_token);
+      }
+    });
+    tokenClient.requestAccessToken({ prompt: _googleAccessToken ? '' : 'consent' });
+  });
+}
+
+function parseZoomFromText(text) {
+  const urlMatch = text.match(/https:\/\/[a-z0-9.-]*zoom\.us\/j\/[^\s<"&\n]+/);
+  let zoomUrl = urlMatch ? urlMatch[0].replace(/&amp;/g, '&') : '未定';
+  const idMatch = text.match(/(?:ミーティングID[：:\s]+|Meeting ID[：:\s]+)([0-9 ]+)/i);
+  const meetingId = idMatch ? idMatch[1].trim() : '未定';
+  const passMatch = text.match(/(?:パスコード[：:\s]+|パスワード[：:\s]+|Passcode[：:\s]+|Password[：:\s]+)([A-Za-z0-9]+)/i);
+  const passcode = passMatch ? passMatch[1].trim() : '未定';
+  return { zoomUrl, meetingId, passcode };
+}
+
+async function fetchNextMtgData(meetingTitle) {
+  const empty = { datetime: '未定', zoomUrl: '未定', meetingId: '未定', passcode: '未定' };
+  const clientId = getGoogleClientId();
+  if (!clientId) return empty;
+
+  try {
+    if (!_googleAccessToken) await authorizeGoogle();
+    if (!_googleAccessToken) return empty;
+
+    // 会議名から顧客名を抽出（「／」以降）
+    const searchQuery = meetingTitle.includes('／') ? meetingTitle.split('／').pop().trim() : meetingTitle;
+
+    const params = new URLSearchParams({
+      q: searchQuery,
+      timeMin: new Date().toISOString(),
+      singleEvents: 'true',
+      orderBy: 'startTime',
+      maxResults: '5'
+    });
+    const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?${params}`, {
+      headers: { 'Authorization': `Bearer ${_googleAccessToken}` }
+    });
+    if (res.status === 401) {
+      _googleAccessToken = null;
+      await authorizeGoogle();
+      return fetchNextMtgData(meetingTitle);
+    }
+    if (!res.ok) return empty;
+
+    const data = await res.json();
+    if (!data.items || data.items.length === 0) return empty;
+
+    const event = data.items[0];
+    const startDt = event.start.dateTime || event.start.date;
+    const endDt = event.end.dateTime || event.end.date;
+    const s = new Date(startDt);
+    const days = ['日','月','火','水','木','金','土'];
+    let datetime = `${s.getMonth()+1}/${s.getDate()}（${days[s.getDay()]}）`;
+    if (event.start.dateTime) {
+      const e = new Date(endDt);
+      datetime += ` ${String(s.getHours()).padStart(2,'0')}:${String(s.getMinutes()).padStart(2,'0')}～${String(e.getHours()).padStart(2,'0')}:${String(e.getMinutes()).padStart(2,'0')}`;
+    }
+
+    const zoom = parseZoomFromText((event.description || '') + ' ' + (event.location || ''));
+    return { datetime, ...zoom };
+  } catch(e) {
+    console.warn('カレンダー取得エラー:', e);
+    return empty;
+  }
+}
 
 // ===== TABS =====
 function switchTab(name) {
@@ -796,10 +905,16 @@ async function runMinutes() {
   const our = document.getElementById('mtgOur').value || '（未入力）';
 
   document.getElementById('btnMinutesStart').disabled = true;
-  document.getElementById('btnMinutesCopy').style.display = 'none';
   document.getElementById('minutesProgressBar').style.display = '';
+  document.getElementById('minutesProgressFill').style.width = '10%';
+  document.getElementById('minutesProgressText').textContent = 'Googleカレンダーから次回MTGを取得中...';
+
+  // Googleカレンダーから次回MTG取得
+  const nextMtg = await fetchNextMtgData(title);
+
+  document.getElementById('minutesProgressFill').style.width = '30%';
+  document.getElementById('btnMinutesCopy').style.display = 'none';
   document.getElementById('minutesProgressFill').style.width = '60%';
-  document.getElementById('minutesProgressText').textContent = '議事録生成中...';
   document.getElementById('minutesResultCard').style.display = 'none';
 
   const prompt = `あなたは議事録作成のエキスパートです。以下の会議情報と文字起こしをもとに、詳細な議事録を作成してください。
@@ -839,17 +954,46 @@ async function runMinutes() {
 |--------|-----------|------|
 
 次回会議
-- 日時: （言及があれば記載、なければ「未定」）
+- 日時: ${nextMtg.datetime}
+- Zoom URL: ${nextMtg.zoomUrl}
+- ミーティングID: ${nextMtg.meetingId}
+- パスコード: ${nextMtg.passcode}
 
 顧客向け案内文（Facebook Messenger用）
-（議事録の要点と次回アクションを伝える、丁寧でカジュアルな文章）
+@[先方参加者の代表者名] 様
+Cc：代表、参加メンバー
+
+本日もMTGのお時間をいただきありがとうございました。
+━━━━━━━━━━━━━━━━━
+📝議事録について
+━━━━━━━━━━━━━━━━━
+簡単ではございますが、議事録を作成しましたので共有いたします。
+[議事録URL]
+
+━━━━━━━━━━━━━━━━━
+📅次回MTGについて
+━━━━━━━━━━━━━━━━━
+■日時
+${nextMtg.datetime}
+
+■Web会議URL
+${nextMtg.zoomUrl}
+ミーティングID： ${nextMtg.meetingId}
+パスコード： ${nextMtg.passcode}
+
+━━━━━━━━━━━━━━━━━
+引き続き、どうぞ宜しくお願いいたします。
 
 ---
 【作成ルール】
 - 文字起こしの内容を最初から最後まで省略せずすべて反映してください
 - 金額・数値・日付・企業名・人名など具体的な情報は必ず正確に記載してください
-- 絵文字・Markdown記号（#、**など）は使用しないでください
-- 情報が不足している場合は「要確認」、未定の場合は「TBD」と記載してください
+- 絵文字はMessenger案内文のアイコン（📝📅）と区切り線（━）のみ使用可、その他は使用しないでください
+- Markdown記号（#、**など）は使用しないでください
+- 情報が不足している場合は「要確認」、未定の場合は「未定」と記載してください
+- Messenger案内文の[先方参加者の代表者名]は先方参加者の最初の一人の名前を入れてください
+- Messenger案内文の[議事録URL]はそのまま「[議事録URL]」と出力してください（後で手動で入力）
+- 次回MTGのZoom情報（URL・ID・パスコード）は文字起こしから正確に抽出してください
 
 【文字起こし】
 ${transcript}`;
