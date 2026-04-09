@@ -371,7 +371,7 @@ function authorizeGoogle() {
     const clientId = getGoogleClientId();
     if (!clientId) { resolve(null); return; }
     if (typeof google === 'undefined' || !google.accounts) { resolve(null); return; }
-    const timer = setTimeout(() => reject(new Error('Google認証タイムアウト')), 15000);
+    const timer = setTimeout(() => reject(new Error('Google認証タイムアウト')), 5000);
     const tokenClient = google.accounts.oauth2.initTokenClient({
       client_id: clientId,
       scope: 'https://www.googleapis.com/auth/calendar.readonly',
