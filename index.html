@@ -396,17 +396,22 @@ function parseZoomFromText(text) {
   return { zoomUrl, meetingId, passcode };
 }
 
-async function fetchNextMtgData(meetingTitle) {
+async function fetchNextMtgData(meetingTitle, onStatus) {
+  const log = (msg) => { console.log('[Calendar]', msg); if (onStatus) onStatus(msg); };
   const empty = { datetime: '未定', zoomUrl: '未定', meetingId: '未定', passcode: '未定' };
   const clientId = getGoogleClientId();
-  if (!clientId) return empty;
+  if (!clientId) { log('Google Client IDが未設定のためスキップ'); return empty; }
 
   try {
-    if (!_googleAccessToken) await authorizeGoogle();
-    if (!_googleAccessToken) return empty;
+    if (!_googleAccessToken) {
+      log('Google認証中...');
+      await authorizeGoogle();
+    }
+    if (!_googleAccessToken) { log('認証失敗またはキャンセル'); return empty; }
 
     // 会議名から顧客名を抽出（「／」以降）
     const searchQuery = meetingTitle.includes('／') ? meetingTitle.split('／').pop().trim() : meetingTitle;
+    log(`検索クエリ: "${searchQuery}"`);
 
     const baseParams = {
       timeMin: new Date().toISOString(),
@@ -417,23 +422,26 @@ async function fetchNextMtgData(meetingTitle) {
 
     // まず顧客名で検索、なければ全件から取得
     let event = null;
-    for (const params of [{ ...baseParams, q: searchQuery }, baseParams]) {
+    for (const [label, params] of [['顧客名検索', { ...baseParams, q: searchQuery }], ['全件フォールバック', baseParams]]) {
+      log(`${label}中...`);
       const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?${new URLSearchParams(params)}`, {
         headers: { 'Authorization': `Bearer ${_googleAccessToken}` }
       });
       if (res.status === 401) {
         _googleAccessToken = null;
         await authorizeGoogle();
-        return fetchNextMtgData(meetingTitle);
+        return fetchNextMtgData(meetingTitle, onStatus);
       }
-      if (!res.ok) return empty;
+      if (!res.ok) { log(`APIエラー: ${res.status}`); return empty; }
       const data = await res.json();
+      log(`${label}: ${data.items ? data.items.length : 0}件`);
       if (data.items && data.items.length > 0) {
         event = data.items[0];
+        log(`取得成功: ${event.summary}`);
         break;
       }
     }
-    if (!event) return empty;
+    if (!event) { log('予定が見つかりませんでした'); return empty; }
     const startDt = event.start.dateTime || event.start.date;
     const endDt = event.end.dateTime || event.end.date;
     const s = new Date(startDt);
@@ -447,7 +455,7 @@ async function fetchNextMtgData(meetingTitle) {
     const zoom = parseZoomFromText((event.description || '') + ' ' + (event.location || ''));
     return { datetime, ...zoom };
   } catch(e) {
-    console.warn('カレンダー取得エラー:', e);
+    log(`エラー: ${e.message}`);
     return empty;
   }
 }
@@ -915,10 +923,11 @@ async function runMinutes() {
   document.getElementById('btnMinutesStart').disabled = true;
   document.getElementById('minutesProgressBar').style.display = '';
   document.getElementById('minutesProgressFill').style.width = '10%';
-  document.getElementById('minutesProgressText').textContent = 'Googleカレンダーから次回MTGを取得中...';
+  const progText = document.getElementById('minutesProgressText');
+  progText.textContent = 'Googleカレンダーから次回MTGを取得中...';
 
   // Googleカレンダーから次回MTG取得
-  const nextMtg = await fetchNextMtgData(title);
+  const nextMtg = await fetchNextMtgData(title, (msg) => { progText.textContent = `カレンダー: ${msg}`; });
   const hasNextMtg = nextMtg.datetime !== '未定';
   const messengerNextMtgSection = hasNextMtg ? `━━━━━━━━━━━━━━━━━
 📅次回MTGについて
