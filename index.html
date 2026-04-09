@@ -370,10 +370,13 @@ function authorizeGoogle() {
   return new Promise((resolve, reject) => {
     const clientId = getGoogleClientId();
     if (!clientId) { resolve(null); return; }
+    if (typeof google === 'undefined' || !google.accounts) { resolve(null); return; }
+    const timer = setTimeout(() => reject(new Error('Google認証タイムアウト')), 15000);
     const tokenClient = google.accounts.oauth2.initTokenClient({
       client_id: clientId,
       scope: 'https://www.googleapis.com/auth/calendar.readonly',
       callback: (resp) => {
+        clearTimeout(timer);
         if (resp.error) { reject(new Error(resp.error)); return; }
         _googleAccessToken = resp.access_token;
         resolve(resp.access_token);
@@ -911,6 +914,31 @@ async function runMinutes() {
 
   // Googleカレンダーから次回MTG取得
   const nextMtg = await fetchNextMtgData(title);
+  const hasNextMtg = nextMtg.datetime !== '未定';
+  const messengerNextMtgSection = hasNextMtg ? `━━━━━━━━━━━━━━━━━
+📅次回MTGについて
+━━━━━━━━━━━━━━━━━
+■日時
+${nextMtg.datetime}
+
+■Web会議URL
+${nextMtg.zoomUrl}
+ミーティングID： ${nextMtg.meetingId}
+パスコード： ${nextMtg.passcode}
+
+━━━━━━━━━━━━━━━━━` : `━━━━━━━━━━━━━━━━━
+📅次回MTGついて
+━━━━━━━━━━━━━━━━━
+下記URLよりご都合の良い日時をご指定いただけますと幸いです。
+↓↓ オンラインMTG（30分）の日時調整する ↓↓
+
+https://kyozon.eeasy.jp/Advisory_Agreement_sw
+
+・〇月度の〇回分ご調整をお願いいたします。
+
+・1週間を目安にご対応いただけますと幸いです。
+
+━━━━━━━━━━━━━━━━━`;
 
   document.getElementById('minutesProgressFill').style.width = '30%';
   document.getElementById('btnMinutesCopy').style.display = 'none';
@@ -970,18 +998,7 @@ Cc：代表、参加メンバー
 簡単ではございますが、議事録を作成しましたので共有いたします。
 [議事録URL]
 
-━━━━━━━━━━━━━━━━━
-📅次回MTGについて
-━━━━━━━━━━━━━━━━━
-■日時
-${nextMtg.datetime}
-
-■Web会議URL
-${nextMtg.zoomUrl}
-ミーティングID： ${nextMtg.meetingId}
-パスコード： ${nextMtg.passcode}
-
-━━━━━━━━━━━━━━━━━
+${messengerNextMtgSection}
 引き続き、どうぞ宜しくお願いいたします。
 
 ---
