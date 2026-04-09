@@ -408,27 +408,32 @@ async function fetchNextMtgData(meetingTitle) {
     // 会議名から顧客名を抽出（「／」以降）
     const searchQuery = meetingTitle.includes('／') ? meetingTitle.split('／').pop().trim() : meetingTitle;
 
-    const params = new URLSearchParams({
-      q: searchQuery,
+    const baseParams = {
       timeMin: new Date().toISOString(),
       singleEvents: 'true',
       orderBy: 'startTime',
-      maxResults: '5'
-    });
-    const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?${params}`, {
-      headers: { 'Authorization': `Bearer ${_googleAccessToken}` }
-    });
-    if (res.status === 401) {
-      _googleAccessToken = null;
-      await authorizeGoogle();
-      return fetchNextMtgData(meetingTitle);
+      maxResults: '10'
+    };
+
+    // まず顧客名で検索、なければ全件から取得
+    let event = null;
+    for (const params of [{ ...baseParams, q: searchQuery }, baseParams]) {
+      const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?${new URLSearchParams(params)}`, {
+        headers: { 'Authorization': `Bearer ${_googleAccessToken}` }
+      });
+      if (res.status === 401) {
+        _googleAccessToken = null;
+        await authorizeGoogle();
+        return fetchNextMtgData(meetingTitle);
+      }
+      if (!res.ok) return empty;
+      const data = await res.json();
+      if (data.items && data.items.length > 0) {
+        event = data.items[0];
+        break;
+      }
     }
-    if (!res.ok) return empty;
-
-    const data = await res.json();
-    if (!data.items || data.items.length === 0) return empty;
-
-    const event = data.items[0];
+    if (!event) return empty;
     const startDt = event.start.dateTime || event.start.date;
     const endDt = event.end.dateTime || event.end.date;
     const s = new Date(startDt);
