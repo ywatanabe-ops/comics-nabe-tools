@@ -56,10 +56,34 @@ def parse_folder_name(folder_name: str) -> dict:
     return info
 
 
+# ===== MIMEタイプ判定 =====
+MIME_MAP = {
+    ".mp4": "video/mp4",
+    ".m4a": "audio/mp4",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".m4v": "video/mp4",
+}
+
+# ===== VTT解析 =====
+def parse_vtt(text: str) -> str:
+    lines = text.split("\n")
+    result = []
+    for line in lines:
+        line = line.strip()
+        if not line or line == "WEBVTT" or re.match(r"^\d+$", line) or "-->" in line:
+            continue
+        line = re.sub(r"<[^>]+>", "", line)
+        result.append(line)
+    return "\n".join(result)
+
+
 # ===== Gemini文字起こし =====
-def transcribe_with_gemini(mp4_path: Path, info: dict) -> str:
-    print(f"[Gemini] アップロード中: {mp4_path.name}")
-    file_size = mp4_path.stat().st_size
+def transcribe_with_gemini(media_path: Path, info: dict) -> str:
+    suffix = media_path.suffix.lower()
+    mime_type = MIME_MAP.get(suffix, "video/mp4")
+    print(f"[Gemini] アップロード中: {media_path.name} ({mime_type})")
+    file_size = media_path.stat().st_size
 
     # Step1: resumableアップロード開始
     init_res = requests.post(
@@ -67,18 +91,18 @@ def transcribe_with_gemini(mp4_path: Path, info: dict) -> str:
         headers={
             "X-Goog-Upload-Protocol": "resumable",
             "X-Goog-Upload-Command": "start",
-            "X-Goog-Upload-Header-Content-Type": "video/mp4",
+            "X-Goog-Upload-Header-Content-Type": mime_type,
             "X-Goog-Upload-Header-Content-Length": str(file_size),
             "Content-Type": "application/json",
         },
-        json={"file": {"displayName": mp4_path.name}}
+        json={"file": {"displayName": media_path.name}}
     )
     upload_url = init_res.headers.get("X-Goog-Upload-URL")
     if not upload_url:
         raise Exception("アップロードURL取得失敗")
 
     # Step2: ファイルアップロード
-    with open(mp4_path, "rb") as f:
+    with open(media_path, "rb") as f:
         upload_res = requests.post(
             upload_url,
             headers={
@@ -124,7 +148,7 @@ def transcribe_with_gemini(mp4_path: Path, info: dict) -> str:
         f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
         json={
             "contents": [{"role": "user", "parts": [
-                {"fileData": {"mimeType": "video/mp4", "fileUri": file_uri}},
+                {"fileData": {"mimeType": mime_type, "fileUri": file_uri}},
                 {"text": prompt}
             ]}],
             "generationConfig": {"maxOutputTokens": 65536}
@@ -344,18 +368,31 @@ def upload_to_notion(minutes_text: str, info: dict):
     return page_url
 
 
+# 対応ファイル拡張子
+MEDIA_EXTS = {".mp4", ".m4a", ".mp3", ".wav", ".m4v"}
+TEXT_EXTS  = {".txt", ".vtt"}
+
+
 # ===== メイン処理 =====
-def process_mp4(mp4_path: Path):
-    folder_name = mp4_path.parent.name
+def process_file(file_path: Path):
+    folder_name = file_path.parent.name
     info = parse_folder_name(folder_name)
     print(f"\n{'='*50}")
     print(f"処理開始: {folder_name}")
     print(f"会議名: {info['title']} / 日付: {info['date']} / 先方: {info['other']}")
 
     try:
-        transcript = transcribe_with_gemini(mp4_path, info)
-        minutes    = generate_minutes_with_claude(transcript, info)
-        url        = upload_to_notion(minutes, info)
+        suffix = file_path.suffix.lower()
+        if suffix in TEXT_EXTS:
+            # テキスト/VTTはそのまま読み込む
+            raw = file_path.read_text(encoding="utf-8", errors="ignore")
+            transcript = parse_vtt(raw) if suffix == ".vtt" else raw
+            print(f"[テキスト] 文字起こしファイルを読み込みました ({len(transcript)}文字)")
+        else:
+            transcript = transcribe_with_gemini(file_path, info)
+
+        minutes = generate_minutes_with_claude(transcript, info)
+        url     = upload_to_notion(minutes, info)
         print(f"完了: {url}")
     except Exception as e:
         print(f"[ERROR] {e}")
@@ -369,7 +406,7 @@ class ZoomFolderHandler(FileSystemEventHandler):
         if event.is_directory:
             return
         path = Path(event.src_path)
-        if path.suffix.lower() not in (".mp4", ".m4a"):
+        if path.suffix.lower() not in MEDIA_EXTS | TEXT_EXTS:
             return
         key = str(path)
         if key in self.processed:
@@ -378,7 +415,7 @@ class ZoomFolderHandler(FileSystemEventHandler):
         time.sleep(5)
         self.processed.add(key)
         save_processed(self.processed)
-        process_mp4(path)
+        process_file(path)
 
 
 if __name__ == "__main__":
