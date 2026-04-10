@@ -7,9 +7,15 @@ import re
 import time
 import json
 import requests
+from datetime import datetime, timezone
 from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
 
 # ===== 設定 =====
 ZOOM_FOLDER = Path(os.path.expanduser("~")) / "Documents" / "Zoom"
@@ -19,7 +25,10 @@ NOTION_API_KEY = os.environ.get("NOTION_API_KEY", "")
 NOTION_DB_ID   = os.environ.get("NOTION_DB_ID", "")
 NOTION_PROXY   = "https://notion-proxy.y-watanabe-502.workers.dev"
 
-PROCESSED_FILE = Path(__file__).parent / ".processed_files.json"
+PROCESSED_FILE  = Path(__file__).parent / ".processed_files.json"
+CLIENT_SECRET   = Path(__file__).parent / "client_secret.json"
+TOKEN_FILE      = Path(__file__).parent / "token.json"
+CALENDAR_SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 
 
 def load_processed():
@@ -54,6 +63,82 @@ def parse_folder_name(folder_name: str) -> dict:
         info["other"] = info["title"].split("／")[-1].strip()
 
     return info
+
+
+# ===== Googleカレンダー認証 =====
+def get_calendar_service():
+    if not CLIENT_SECRET.exists():
+        return None
+    creds = None
+    if TOKEN_FILE.exists():
+        creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), CALENDAR_SCOPES)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRET), CALENDAR_SCOPES)
+            creds = flow.run_local_server(port=0)
+        TOKEN_FILE.write_text(creds.to_json())
+    return build("calendar", "v3", credentials=creds)
+
+
+# ===== 次回MTG取得 =====
+def fetch_next_meeting(title: str) -> dict:
+    empty = {"datetime": "未定", "zoomUrl": "未定", "meetingId": "未定", "passcode": "未定"}
+    try:
+        service = get_calendar_service()
+        if not service:
+            print("[Calendar] client_secret.json が見つかりません。スキップします。")
+            return empty
+
+        search_query = title.split("／")[-1].strip() if "／" in title else title
+
+        # 今日の翌日0時以降で検索
+        today = datetime.now().date()
+        tomorrow = datetime(today.year, today.month, today.day + 1, tzinfo=timezone.utc)
+        time_min = tomorrow.isoformat()
+
+        # 顧客名で検索して直近1件だけ取得
+        result = service.events().list(
+            calendarId="primary",
+            q=search_query,
+            timeMin=time_min,
+            singleEvents=True,
+            orderBy="startTime",
+            maxResults=1
+        ).execute()
+        items = result.get("items", [])
+        if not items:
+            print("[Calendar] 次回の予定が見つかりませんでした")
+            return empty
+        event = items[0]
+
+        start_dt = event["start"].get("dateTime") or event["start"].get("date")
+        end_dt   = event["end"].get("dateTime")   or event["end"].get("date")
+        s = datetime.fromisoformat(start_dt)
+        e = datetime.fromisoformat(end_dt)
+        days = ["月", "火", "水", "木", "金", "土", "日"]
+        dt_str = f"{s.month}/{s.day}（{days[s.weekday()]}）"
+        if "T" in start_dt:
+            dt_str += f" {s.strftime('%H:%M')}～{e.strftime('%H:%M')}"
+
+        desc = (event.get("description") or "") + " " + (event.get("location") or "")
+        zoom = parse_zoom_from_text(desc)
+        print(f"[Calendar] 取得成功: {event.get('summary')} → {dt_str}")
+        return {"datetime": dt_str, **zoom}
+    except Exception as ex:
+        print(f"[Calendar] エラー: {ex}")
+        return empty
+
+
+def parse_zoom_from_text(text: str) -> dict:
+    url_match = re.search(r"https://[a-z0-9.-]*zoom\.us/j/[^\s<\"&\n]+", text)
+    zoom_url = url_match.group(0) if url_match else "未定"
+    id_match   = re.search(r"(?:ミーティングID[：:\s]+|Meeting ID[：:\s]+)([0-9 ]+)", text, re.I)
+    meeting_id = id_match.group(1).strip() if id_match else "未定"
+    pass_match = re.search(r"(?:パスコード[：:\s]+|パスワード[：:\s]+|Passcode[：:\s]+|Password[：:\s]+)([A-Za-z0-9]+)", text, re.I)
+    passcode   = pass_match.group(1).strip() if pass_match else "未定"
+    return {"zoomUrl": zoom_url, "meetingId": meeting_id, "passcode": passcode}
 
 
 # ===== MIMEタイプ判定 =====
@@ -170,8 +255,26 @@ def generate_minutes_with_claude(transcript: str, info: dict) -> str:
     other  = info["other"]
     our    = info["our"]
     is_internal = "社内" in title
+    next_mtg = info.get("next_mtg", {})
+    has_next_mtg = next_mtg.get("datetime", "未定") != "未定"
 
-    next_mtg_section = "" if is_internal else """━━━━━━━━━━━━━━━━━
+    if is_internal:
+        next_mtg_section = ""
+    elif has_next_mtg:
+        next_mtg_section = f"""━━━━━━━━━━━━━━━━━
+📅次回MTGについて
+━━━━━━━━━━━━━━━━━
+■日時
+{next_mtg['datetime']}
+
+■Web会議URL
+{next_mtg['zoomUrl']}
+ミーティングID： {next_mtg['meetingId']}
+パスコード： {next_mtg['passcode']}
+
+━━━━━━━━━━━━━━━━━"""
+    else:
+        next_mtg_section = """━━━━━━━━━━━━━━━━━
 📅次回MTGついて
 ━━━━━━━━━━━━━━━━━
 下記URLよりご都合の良い日時をご指定いただけますと幸いです。
@@ -222,10 +325,10 @@ https://kyozon.eeasy.jp/Advisory_Agreement_sw
 |--------|-----------|------|
 
 次回会議
-- 日時: 未定
-- Zoom URL: 未定
-- ミーティングID: 未定
-- パスコード: 未定
+- 日時: {next_mtg.get('datetime', '未定')}
+- Zoom URL: {next_mtg.get('zoomUrl', '未定')}
+- ミーティングID: {next_mtg.get('meetingId', '未定')}
+- パスコード: {next_mtg.get('passcode', '未定')}
 
 顧客向け案内文（Facebook Messenger用）
 @[先方参加者の代表者名] 様
@@ -390,6 +493,13 @@ def process_file(file_path: Path):
             print(f"[テキスト] 文字起こしファイルを読み込みました ({len(transcript)}文字)")
         else:
             transcript = transcribe_with_gemini(file_path, info)
+
+        # 次回MTG取得（社内はスキップ）
+        is_internal = "社内" in info["title"]
+        next_mtg = {"datetime": "未定", "zoomUrl": "未定", "meetingId": "未定", "passcode": "未定"}
+        if not is_internal:
+            next_mtg = fetch_next_meeting(info["title"])
+        info["next_mtg"] = next_mtg
 
         minutes = generate_minutes_with_claude(transcript, info)
         url     = upload_to_notion(minutes, info)
