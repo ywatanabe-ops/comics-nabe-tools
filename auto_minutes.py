@@ -4,9 +4,13 @@ Zoomフォルダ監視 → 自動議事録生成 → Notion保存
 
 import os
 import re
+import sys
 import time
 import json
 import requests
+import anthropic
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
 from datetime import datetime, timezone
 from pathlib import Path
 from dotenv import load_dotenv
@@ -361,24 +365,15 @@ Cc：代表、参加メンバー
 {transcript}"""
 
     print("[Claude] 議事録生成中...")
-    res = requests.post(
-        "https://api.anthropic.com/v1/messages",
-        headers={
-            "Content-Type": "application/json",
-            "x-api-key": CLAUDE_API_KEY,
-            "anthropic-version": "2023-06-01",
-            "anthropic-beta": "output-128k-2025-02-19",
-        },
-        json={
-            "model": "claude-sonnet-4-5",
-            "max_tokens": 32000,
-            "messages": [{"role": "user", "content": prompt}]
-        }
-    )
-    data = res.json()
-    if "error" in data:
-        raise Exception(f"Claude APIエラー: {data['error']}")
-    text = data["content"][0]["text"]
+    client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
+    text = ""
+    with client.messages.stream(
+        model="claude-sonnet-4-5",
+        max_tokens=32000,
+        messages=[{"role": "user", "content": prompt}],
+        extra_headers={"anthropic-beta": "output-128k-2025-02-19"}
+    ) as stream:
+        text = stream.get_final_text()
     print("[Claude] 議事録生成完了")
     return text
 
@@ -531,8 +526,6 @@ class ZoomFolderHandler(FileSystemEventHandler):
 
 
 if __name__ == "__main__":
-    import sys
-
     # 環境変数チェック
     missing = [k for k, v in {
         "GEMINI_API_KEY": GEMINI_API_KEY,
@@ -544,11 +537,28 @@ if __name__ == "__main__":
         print(f"[ERROR] 環境変数が未設定: {', '.join(missing)}")
         exit(1)
 
-    # テストモード: python auto_minutes.py test "ファイルパス"
-    if len(sys.argv) >= 3 and sys.argv[1] == "test":
-        test_path = Path(sys.argv[2])
-        print(f"テストモード: {test_path}")
-        process_file(test_path)
+    # テストモード: python auto_minutes.py test "フォルダ名の一部"
+    if len(sys.argv) >= 2 and sys.argv[1] == "test":
+        keyword = sys.argv[2] if len(sys.argv) >= 3 else ""
+        # ZoomフォルダからVTT/MP4を検索
+        candidates = []
+        for folder in sorted(ZOOM_FOLDER.iterdir()):
+            if not folder.is_dir():
+                continue
+            if keyword and keyword not in folder.name:
+                continue
+            for ext in [".vtt", ".m4a", ".mp4"]:
+                files = list(folder.glob(f"*{ext}"))
+                if files:
+                    candidates.append(files[0])
+                    break
+        if not candidates:
+            print(f"[ERROR] 対象ファイルが見つかりません: {ZOOM_FOLDER}")
+            exit(1)
+        # 最新のものを使う
+        target = candidates[-1]
+        print(f"テストモード: {target}")
+        process_file(target)
         exit(0)
 
     print(f"監視開始: {ZOOM_FOLDER}")
