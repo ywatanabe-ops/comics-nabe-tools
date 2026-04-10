@@ -9,6 +9,8 @@ import json
 import requests
 from datetime import datetime, timezone
 from pathlib import Path
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).parent / ".env")
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
@@ -18,7 +20,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 # ===== 設定 =====
-ZOOM_FOLDER = Path(os.path.expanduser("~")) / "Documents" / "Zoom"
+ZOOM_FOLDER = Path(os.path.expanduser("~")) / "OneDrive" / "ドキュメント" / "Zoom"
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY", "")
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY", "")
@@ -529,8 +531,7 @@ class ZoomFolderHandler(FileSystemEventHandler):
 
 
 if __name__ == "__main__":
-    print(f"監視開始: {ZOOM_FOLDER}")
-    print("Ctrl+C で停止")
+    import sys
 
     # 環境変数チェック
     missing = [k for k, v in {
@@ -542,6 +543,16 @@ if __name__ == "__main__":
     if missing:
         print(f"[ERROR] 環境変数が未設定: {', '.join(missing)}")
         exit(1)
+
+    # テストモード: python auto_minutes.py test "ファイルパス"
+    if len(sys.argv) >= 3 and sys.argv[1] == "test":
+        test_path = Path(sys.argv[2])
+        print(f"テストモード: {test_path}")
+        process_file(test_path)
+        exit(0)
+
+    print(f"監視開始: {ZOOM_FOLDER}")
+    print("Ctrl+C で停止")
 
     handler  = ZoomFolderHandler()
     observer = Observer()
