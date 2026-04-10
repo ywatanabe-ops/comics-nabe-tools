@@ -926,10 +926,14 @@ async function runMinutes() {
   const progText = document.getElementById('minutesProgressText');
   progText.textContent = 'Googleカレンダーから次回MTGを取得中...';
 
-  // Googleカレンダーから次回MTG取得
-  const nextMtg = await fetchNextMtgData(title, (msg) => { progText.textContent = `カレンダー: ${msg}`; });
-  const hasNextMtg = nextMtg.datetime !== '未定';
-  const messengerNextMtgSection = hasNextMtg ? `━━━━━━━━━━━━━━━━━
+  // 社内MTGはカレンダー取得・次回MTGセクション不要
+  const isInternal = title.includes('社内');
+  let nextMtg = { datetime: '未定', zoomUrl: '未定', meetingId: '未定', passcode: '未定' };
+  if (!isInternal) {
+    nextMtg = await fetchNextMtgData(title, (msg) => { progText.textContent = `カレンダー: ${msg}`; });
+  }
+  const hasNextMtg = !isInternal && nextMtg.datetime !== '未定';
+  const messengerNextMtgSection = isInternal ? `` : hasNextMtg ? `━━━━━━━━━━━━━━━━━
 📅次回MTGについて
 ━━━━━━━━━━━━━━━━━
 ■日時
