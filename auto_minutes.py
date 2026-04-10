@@ -513,16 +513,24 @@ class ZoomFolderHandler(FileSystemEventHandler):
         if event.is_directory:
             return
         path = Path(event.src_path)
-        if path.suffix.lower() not in MEDIA_EXTS | TEXT_EXTS:
+        # MP4が保存されたタイミングをトリガーにする
+        if path.suffix.lower() not in {".mp4", ".m4v"}:
             return
-        key = str(path)
-        if key in self.processed:
+        folder_key = str(path.parent)
+        if folder_key in self.processed:
             return
-        # ファイルが書き込み完了するまで少し待つ
-        time.sleep(5)
-        self.processed.add(key)
+        # ファイルが書き込み完了するまで待つ
+        time.sleep(10)
+        self.processed.add(folder_key)
         save_processed(self.processed)
-        process_file(path)
+        # 同じフォルダのVTTを優先、なければMP4を使う
+        vtt_files = list(path.parent.glob("*.vtt"))
+        if vtt_files:
+            print(f"[監視] VTTファイルを使用: {vtt_files[0].name}")
+            process_file(vtt_files[0])
+        else:
+            print(f"[監視] MP4ファイルを使用: {path.name}")
+            process_file(path)
 
 
 if __name__ == "__main__":
