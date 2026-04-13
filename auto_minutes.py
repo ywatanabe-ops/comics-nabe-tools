@@ -114,6 +114,8 @@ def fetch_next_meeting(title: str) -> dict:
             maxResults=1
         ).execute()
         items = result.get("items", [])
+        # 社内MTGは除外
+        items = [e for e in items if "社内" not in (e.get("summary") or "")]
         if not items:
             print("[Calendar] 次回の予定が見つかりませんでした")
             return empty
