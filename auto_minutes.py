@@ -509,11 +509,7 @@ class ZoomFolderHandler(FileSystemEventHandler):
     def __init__(self):
         self.processed = load_processed()
 
-    def on_created(self, event):
-        if event.is_directory:
-            return
-        path = Path(event.src_path)
-        # MP4が保存されたタイミングをトリガーにする
+    def _handle_mp4(self, path: Path):
         if path.suffix.lower() not in {".mp4", ".m4v"}:
             return
         folder_key = str(path.parent)
@@ -531,6 +527,14 @@ class ZoomFolderHandler(FileSystemEventHandler):
         else:
             print(f"[監視] MP4ファイルを使用: {path.name}")
             process_file(path)
+
+    def on_created(self, event):
+        if not event.is_directory:
+            self._handle_mp4(Path(event.src_path))
+
+    def on_moved(self, event):
+        if not event.is_directory:
+            self._handle_mp4(Path(event.dest_path))
 
 
 if __name__ == "__main__":
