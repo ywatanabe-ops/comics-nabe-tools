@@ -137,6 +137,7 @@ def fetch_next_meeting(title: str) -> dict:
         desc = (event.get("description") or "") + " " + (event.get("location") or "")
         zoom = parse_zoom_from_text(desc)
         print(f"[Calendar] 取得成功: {event.get('summary')} → {dt_str}")
+        print(f"[Calendar] ZoomURL: {zoom['zoomUrl']} / ID: {zoom['meetingId']} / Pass: {zoom['passcode']}")
         return {"datetime": dt_str, **zoom}
     except Exception as ex:
         print(f"[Calendar] エラー: {ex}")
