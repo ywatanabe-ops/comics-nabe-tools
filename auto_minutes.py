@@ -557,9 +557,11 @@ if __name__ == "__main__":
         print(f"[ERROR] 環境変数が未設定: {', '.join(missing)}")
         exit(1)
 
-    # テストモード: python auto_minutes.py test "フォルダ名の一部"
+    # テストモード: python auto_minutes.py test "フォルダ名の一部" [--force]
     if len(sys.argv) >= 2 and sys.argv[1] == "test":
-        keyword = sys.argv[2] if len(sys.argv) >= 3 else ""
+        args = sys.argv[2:]
+        force = "--force" in args
+        keyword = next((a for a in args if not a.startswith("--")), "")
         # ZoomフォルダからVTT/MP4を検索
         candidates = []
         for folder in sorted(ZOOM_FOLDER.iterdir()):
@@ -577,8 +579,17 @@ if __name__ == "__main__":
             exit(1)
         # 最新のものを使う
         target = candidates[-1]
+        folder_key = str(target.parent)
+        processed = load_processed()
+        if folder_key in processed and not force:
+            print(f"[SKIP] 処理済みです: {target.parent.name}")
+            print(f"  再実行するには --force オプションをつけてください")
+            print(f"  例: python auto_minutes.py test {keyword} --force")
+            exit(0)
         print(f"テストモード: {target}")
         process_file(target)
+        processed.add(folder_key)
+        save_processed(processed)
         exit(0)
 
     print(f"監視開始: {ZOOM_FOLDER}")
