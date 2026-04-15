@@ -100,9 +100,12 @@ def fetch_next_meeting(title: str) -> dict:
         search_query = title.split("／")[-1].strip() if "／" in title else title
 
         # 今日の翌日0時以降で検索
-        today = datetime.now().date()
-        tomorrow = datetime(today.year, today.month, today.day + 1, tzinfo=timezone.utc)
+        from datetime import timedelta
+        tomorrow = datetime.now(timezone.utc) + timedelta(days=1)
+        tomorrow = tomorrow.replace(hour=0, minute=0, second=0, microsecond=0)
         time_min = tomorrow.isoformat()
+
+        print(f"[Calendar] 検索クエリ: '{search_query}' / timeMin: {time_min}")
 
         # 顧客名で検索して直近1件だけ取得
         result = service.events().list(
@@ -111,9 +114,10 @@ def fetch_next_meeting(title: str) -> dict:
             timeMin=time_min,
             singleEvents=True,
             orderBy="startTime",
-            maxResults=1
+            maxResults=10
         ).execute()
         items = result.get("items", [])
+        print(f"[Calendar] 検索結果: {[e.get('summary') for e in items]}")
         # 社内MTGは除外
         items = [e for e in items if "社内" not in (e.get("summary") or "")]
         if not items:
