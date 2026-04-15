@@ -275,7 +275,7 @@ def generate_minutes_with_claude(transcript: str, info: dict) -> str:
         next_mtg_section = ""
     elif has_next_mtg:
         next_mtg_section = f"""━━━━━━━━━━━━━━━━━
-📅次回MTGについて
+📅次回MTGついて
 ━━━━━━━━━━━━━━━━━
 ■日時
 {next_mtg['datetime']}
@@ -366,6 +366,7 @@ Cc：代表、参加メンバー
 - 情報が不足している場合は「要確認」、未定の場合は「未定」と記載してください
 - Messenger案内文の[先方参加者の代表者名]は先方参加者の最初の一人の名前を入れてください
 - Messenger案内文の[議事録URL]はそのまま「[議事録URL]」と出力してください（後で手動で入力）
+- Messenger案内文は余分な空行を入れず、上記テンプレートの改行通りに出力してください（@様とCc：の間は改行1つ、━と本文の間も改行1つ）
 - 次回MTGのZoom情報（URL・ID・パスコード）は文字起こしから正確に抽出してください
 
 【文字起こし】
