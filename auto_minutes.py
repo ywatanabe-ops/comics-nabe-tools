@@ -234,7 +234,7 @@ def transcribe_with_gemini(media_path: Path, info: dict) -> str:
         poll_count += 1
         print(f"[Gemini] {poll_count * 5}秒経過 state={file_state}")
 
-    # Step4: 文字起こし
+    # Step4: 文字起こし（ストリーミング）
     prompt = (
         f"{info['title']}\n{info['date']}・{info['time']}\n"
         f"先方：{info['other']}\n弊社：{info['our']}\n\n"
@@ -243,19 +243,40 @@ def transcribe_with_gemini(media_path: Path, info: dict) -> str:
         "話者が変わるたびに明確に区別してください。"
     )
     gen_res = requests.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
+        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse&key={GEMINI_API_KEY}",
         json={
             "contents": [{"role": "user", "parts": [
                 {"fileData": {"mimeType": mime_type, "fileUri": file_uri}},
                 {"text": prompt}
             ]}],
             "generationConfig": {"maxOutputTokens": 65536}
-        }
+        },
+        stream=True,
+        timeout=600,
     )
-    gen_data = gen_res.json()
-    transcript = gen_data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+    import json as _json
+    chunks = []
+    for line in gen_res.iter_lines():
+        if not line:
+            continue
+        text = line.decode("utf-8") if isinstance(line, bytes) else line
+        if not text.startswith("data: "):
+            continue
+        payload = text[6:]
+        if payload.strip() == "[DONE]":
+            break
+        try:
+            chunk_data = _json.loads(payload)
+            part_text = chunk_data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+            if part_text:
+                chunks.append(part_text)
+                print(".", end="", flush=True)
+        except Exception:
+            pass
+    print()
+    transcript = "".join(chunks)
     if not transcript:
-        raise Exception(f"文字起こし失敗: {gen_data}")
+        raise Exception("文字起こし失敗: レスポンスが空です")
     print("[Gemini] 文字起こし完了")
     return transcript
 
@@ -368,6 +389,8 @@ Cc：代表、参加メンバー
 - Messenger案内文の[議事録URL]はそのまま「[議事録URL]」と出力してください（後で手動で入力）
 - Messenger案内文は余分な空行を入れず、上記テンプレートの改行通りに出力してください（@様とCc：の間は改行1つ、━と本文の間も改行1つ）
 - 次回MTGのZoom情報（URL・ID・パスコード）は文字起こしから正確に抽出してください
+- 「〇〇より」「〇〇氏より」「〇〇から」などの発言者帰属表現は使用しないでください。内容を主語なしで簡潔・明確に記載してください
+- 発言を「」で引用する形式は使用しないでください。発言内容は地の文として簡潔にまとめてください
 
 【文字起こし】
 {transcript}"""
