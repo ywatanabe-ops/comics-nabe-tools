@@ -7,11 +7,14 @@ import re
 import sys
 import time
 import json
+import shutil
+import tempfile
 import requests
 import anthropic
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
-from datetime import datetime, timezone
+from base64 import b64encode
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
@@ -31,6 +34,11 @@ NOTION_API_KEY = os.environ.get("NOTION_API_KEY", "")
 NOTION_DB_ID   = os.environ.get("NOTION_DB_ID", "")
 NOTION_PROXY   = "https://notion-proxy.y-watanabe-502.workers.dev"
 
+ZOOM_ACCOUNT_ID  = os.environ.get("ZOOM_ACCOUNT_ID", "")
+ZOOM_CLIENT_ID   = os.environ.get("ZOOM_CLIENT_ID", "")
+ZOOM_CLIENT_SECRET = os.environ.get("ZOOM_CLIENT_SECRET", "")
+ZOOM_USER_ID     = os.environ.get("ZOOM_USER_ID", "me")
+
 PROCESSED_FILE  = Path(__file__).parent / ".processed_files.json"
 CLIENT_SECRET   = Path(__file__).parent / "client_secret.json"
 TOKEN_FILE      = Path(__file__).parent / "token.json"
@@ -46,23 +54,186 @@ def save_processed(processed: set):
     PROCESSED_FILE.write_text(json.dumps(list(processed)))
 
 
+# ===== Zoom クラウド録画 API =====
+
+ZOOM_TOKEN_URL   = "https://zoom.us/oauth/token"
+ZOOM_API_BASE    = "https://api.zoom.us/v2"
+PREFERRED_TYPES  = [
+    "shared_screen_with_speaker_view",
+    "active_speaker",
+    "gallery_view",
+    "shared_screen_with_gallery_view",
+    "shared_screen",
+]
+
+def zoom_get_token() -> str:
+    """Server-to-Server OAuth でアクセストークンを取得する。"""
+    creds = b64encode(f"{ZOOM_CLIENT_ID}:{ZOOM_CLIENT_SECRET}".encode()).decode()
+    resp = requests.post(
+        ZOOM_TOKEN_URL,
+        params={"grant_type": "account_credentials", "account_id": ZOOM_ACCOUNT_ID},
+        headers={"Authorization": f"Basic {creds}"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()["access_token"]
+
+def zoom_list_recordings(token: str, days: int = 1) -> list:
+    """指定日数分のクラウド録画一覧を取得する。"""
+    now = datetime.now(timezone.utc)
+    from_date = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+    to_date   = now.strftime("%Y-%m-%d")
+    headers   = {"Authorization": f"Bearer {token}"}
+    meetings  = []
+    next_page = None
+    while True:
+        params = {"from": from_date, "to": to_date, "page_size": 30}
+        if next_page:
+            params["next_page_token"] = next_page
+        resp = requests.get(f"{ZOOM_API_BASE}/users/{ZOOM_USER_ID}/recordings",
+                            headers=headers, params=params, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        meetings.extend(data.get("meetings", []))
+        next_page = data.get("next_page_token")
+        if not next_page:
+            break
+    return meetings
+
+def zoom_pick_mp4(recording_files: list) -> dict | None:
+    """最適な MP4 ファイルを選択する。"""
+    mp4s = [f for f in recording_files
+            if f.get("file_type") == "MP4"
+            and f.get("download_url")
+            and f.get("status") == "completed"]
+    for ptype in PREFERRED_TYPES:
+        for f in mp4s:
+            if f.get("recording_type") == ptype:
+                return f
+    return mp4s[0] if mp4s else None
+
+def zoom_download(token: str, download_url: str, dest: Path) -> None:
+    """録画ファイルをダウンロードする。"""
+    url = f"{download_url}?access_token={token}"
+    resp = requests.get(url, stream=True, timeout=600)
+    resp.raise_for_status()
+    total = int(resp.headers.get("content-length", 0))
+    done  = 0
+    with open(dest, "wb") as f:
+        for chunk in resp.iter_content(chunk_size=1024 * 1024):
+            if chunk:
+                f.write(chunk)
+                done += len(chunk)
+                if total:
+                    print(f"\r  {done//(1024*1024)}MB / {total//(1024*1024)}MB ({done/total*100:.0f}%)", end="", flush=True)
+    print()
+
+def zoom_poll(days: int = 1, dry_run: bool = False, reprocess: bool = False) -> None:
+    """Zoom クラウド録画を確認して未処理のものを議事録化する。"""
+    if not all([ZOOM_ACCOUNT_ID, ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET]):
+        print("[ERROR] .env に ZOOM_ACCOUNT_ID / ZOOM_CLIENT_ID / ZOOM_CLIENT_SECRET を設定してください。")
+        return
+
+    print("[Zoom] APIに接続中...")
+    token = zoom_get_token()
+    print("[Zoom] 認証成功")
+
+    meetings = zoom_list_recordings(token, days)
+    print(f"[Zoom] {len(meetings)}件の会議を取得")
+
+    processed = load_processed()
+    count = 0
+
+    for meeting in meetings:
+        uid = f"cloud:{meeting.get('uuid', meeting.get('id', ''))}"
+        if uid in processed and not reprocess:
+            print(f"[Zoom] スキップ（処理済み）: {meeting.get('topic', '')}")
+            continue
+
+        best = zoom_pick_mp4(meeting.get("recording_files", []))
+        if not best:
+            print(f"[Zoom] MP4なし → スキップ: {meeting.get('topic', '')}")
+            continue
+
+        topic      = meeting.get("topic", "会議")
+        start_str  = meeting.get("start_time", "")
+        try:
+            dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+        except Exception:
+            dt = datetime.now(timezone.utc)
+
+        jst  = dt.astimezone(timezone(timedelta(hours=9)))
+        date_str = f"{jst.year}-{jst.month:02d}-{jst.day:02d}"
+        time_str = f"{jst.hour:02d}.{jst.minute:02d}.00"
+        # parse_folder_name が解釈できる形式のフォルダ名を組み立てる
+        folder_name = f"{date_str} {time_str}{topic}"
+
+        print(f"\n[Zoom] 処理: {topic} ({date_str} {jst.hour:02d}:{jst.minute:02d})")
+        if dry_run:
+            print("  [dry-run] スキップ")
+            continue
+
+        tmp_dir = Path(tempfile.mkdtemp())
+        try:
+            mp4_path = tmp_dir / f"{meeting.get('id', 'rec')}.mp4"
+            print("[Zoom] ダウンロード中...")
+            zoom_download(token, best["download_url"], mp4_path)
+            print(f"[Zoom] ダウンロード完了 ({mp4_path.stat().st_size//(1024*1024)}MB)")
+
+            # フォルダ名から会議情報を組み立てる（既存関数を流用）
+            info = parse_folder_name(folder_name)
+            process_file_from_info(mp4_path, info)
+
+            processed.add(uid)
+            save_processed(processed)
+            count += 1
+        except Exception as e:
+            print(f"[ERROR] {e}")
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    print(f"\n[Zoom] 完了: {count}件処理しました。")
+
+
 # ===== フォルダ名から会議情報を解析 =====
 def parse_folder_name(folder_name: str) -> dict:
     """
-    例: "2026-04-09 13.59.53【定例】顧問契約／株式会社ウェルフォート"
+    形式A（ローカル録画）: "2026-04-09 13.59.53【定例】顧問契約／株式会社ウェルフォート"
+    形式B（クラウド録画DL）: "【定例】顧問契約／株式会社ドミニオン　5月 11日 (月曜日)⋅午前11:30～午後12:00"
     """
     info = {"title": folder_name, "date": "", "time": "", "other": "", "our": "弊社"}
 
-    # 日時
+    # 形式A: 先頭が "YYYY-MM-DD HH.MM.SS"
     m = re.match(r"(\d{4}-\d{2}-\d{2})\s+(\d{2})\.(\d{2})\.\d{2}", folder_name)
     if m:
         info["date"] = m.group(1)
         info["time"] = f"{m.group(2)}:{m.group(3)}"
+        title_match = re.search(r"(【.+】.+)", folder_name)
+        if title_match:
+            info["title"] = title_match.group(1)
+    else:
+        # 形式B: "【...】...　5月 11日 (月曜日)⋅午前11:30～午後12:00"
+        m2 = re.search(r"(\d+)月\s*(\d+)日", folder_name)
+        if m2:
+            month = int(m2.group(1))
+            day   = int(m2.group(2))
+            info["date"] = f"{datetime.now().year}-{month:02d}-{day:02d}"
 
-    # 会議名（【】以降）
-    title_match = re.search(r"(【.+】.+)", folder_name)
-    if title_match:
-        info["title"] = title_match.group(1)
+        m3 = re.search(r"(午前|午後)(\d+):(\d+)", folder_name)
+        if m3:
+            ampm   = m3.group(1)
+            hour   = int(m3.group(2))
+            minute = int(m3.group(3))
+            if ampm == "午後" and hour != 12:
+                hour += 12
+            elif ampm == "午前" and hour == 12:
+                hour = 0
+            info["time"] = f"{hour:02d}:{minute:02d}"
+
+        # タイトル = 日付部分より前
+        title_part = re.sub(r"[　\s]+\d+月.*$", "", folder_name).strip()
+        if title_part:
+            info["title"] = title_part
 
     # 顧客名（「／」以降）
     if "／" in info["title"]:
@@ -141,6 +312,60 @@ def fetch_next_meeting(title: str) -> dict:
         return {"datetime": dt_str, **zoom}
     except Exception as ex:
         print(f"[Calendar] エラー: {ex}")
+        return empty
+
+
+def fetch_meeting_from_calendar_by_time(file_time: datetime) -> dict:
+    """ファイル保存時刻の直前の会議をGoogleカレンダーから検索する。"""
+    empty = {"title": "", "date": "", "time": "", "other": "", "our": "弊社"}
+    try:
+        service = get_calendar_service()
+        if not service:
+            print("[Calendar] client_secret.json が見つかりません。スキップします。")
+            return empty
+
+        if file_time.tzinfo is None:
+            file_time = file_time.replace(tzinfo=timezone.utc)
+        time_min = (file_time - timedelta(hours=12)).isoformat()
+        time_max = (file_time + timedelta(minutes=30)).isoformat()
+        jst_time = file_time.astimezone(timezone(timedelta(hours=9)))
+        print(f"[Calendar] {jst_time.strftime('%Y-%m-%d %H:%M')} の直前会議を検索中...")
+
+        result = service.events().list(
+            calendarId="primary",
+            timeMin=time_min,
+            timeMax=time_max,
+            singleEvents=True,
+            orderBy="startTime",
+        ).execute()
+
+        candidates = []
+        for event in result.get("items", []):
+            start_str = event["start"].get("dateTime") or event["start"].get("date")
+            try:
+                start = datetime.fromisoformat(start_str)
+                if start.tzinfo is None:
+                    start = start.replace(tzinfo=timezone(timedelta(hours=9)))
+                if start <= file_time:
+                    candidates.append((event, start))
+            except Exception:
+                continue
+
+        if not candidates:
+            print("[Calendar] 直前の会議が見つかりませんでした")
+            return empty
+
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        event, start = candidates[0]
+        summary = event.get("summary", "会議")
+        jst = start.astimezone(timezone(timedelta(hours=9)))
+        date_str = f"{jst.year}-{jst.month:02d}-{jst.day:02d}"
+        time_str = jst.strftime("%H:%M")
+        other = summary.split("／")[-1].strip() if "／" in summary else ""
+        print(f"[Calendar] 会議を特定: {summary} ({date_str} {time_str})")
+        return {"title": summary, "date": date_str, "time": time_str, "other": other, "our": "弊社"}
+    except Exception as e:
+        print(f"[Calendar] 時刻検索エラー: {e}")
         return empty
 
 
@@ -254,6 +479,8 @@ def transcribe_with_gemini(media_path: Path, info: dict) -> str:
         stream=True,
         timeout=600,
     )
+    if not gen_res.ok:
+        raise Exception(f"Gemini APIエラー {gen_res.status_code}: {gen_res.text[:500]}")
     import json as _json
     chunks = []
     for line in gen_res.iter_lines():
@@ -267,12 +494,22 @@ def transcribe_with_gemini(media_path: Path, info: dict) -> str:
             break
         try:
             chunk_data = _json.loads(payload)
-            part_text = chunk_data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+            candidates = chunk_data.get("candidates", [])
+            if not candidates:
+                error_info = chunk_data.get("error") or chunk_data.get("promptFeedback")
+                if error_info:
+                    print(f"\n[Gemini] APIエラー: {error_info}")
+                continue
+            candidate = candidates[0]
+            finish_reason = candidate.get("finishReason", "")
+            if finish_reason and finish_reason not in ("STOP", "MAX_TOKENS", ""):
+                print(f"\n[Gemini] 生成停止理由: {finish_reason}")
+            part_text = candidate.get("content", {}).get("parts", [{}])[0].get("text", "")
             if part_text:
                 chunks.append(part_text)
                 print(".", end="", flush=True)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"\n[Gemini] chunk解析エラー: {e} / raw: {text[:200]}")
     print()
     transcript = "".join(chunks)
     if not transcript:
@@ -399,7 +636,7 @@ Cc：代表、参加メンバー
     client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
     text = ""
     with client.messages.stream(
-        model="claude-sonnet-4-5",
+        model="claude-sonnet-4-6",
         max_tokens=32000,
         messages=[{"role": "user", "content": prompt}],
         extra_headers={"anthropic-beta": "output-128k-2025-02-19"}
@@ -505,24 +742,17 @@ TEXT_EXTS  = {".txt", ".vtt"}
 
 
 # ===== メイン処理 =====
-def process_file(file_path: Path):
-    folder_name = file_path.parent.name
-    info = parse_folder_name(folder_name)
-    print(f"\n{'='*50}")
-    print(f"処理開始: {folder_name}")
-    print(f"会議名: {info['title']} / 日付: {info['date']} / 先方: {info['other']}")
-
+def process_file_from_info(file_path: Path, info: dict):
+    """ファイルパスと会議情報 dict を受け取って議事録化する（内部共通処理）。"""
     try:
         suffix = file_path.suffix.lower()
         if suffix in TEXT_EXTS:
-            # テキスト/VTTはそのまま読み込む
             raw = file_path.read_text(encoding="utf-8", errors="ignore")
             transcript = parse_vtt(raw) if suffix == ".vtt" else raw
             print(f"[テキスト] 文字起こしファイルを読み込みました ({len(transcript)}文字)")
         else:
             transcript = transcribe_with_gemini(file_path, info)
 
-        # 次回MTG取得（社内はスキップ）
         is_internal = "社内" in info["title"]
         next_mtg = {"datetime": "未定", "zoomUrl": "未定", "meetingId": "未定", "passcode": "未定"}
         if not is_internal:
@@ -536,12 +766,30 @@ def process_file(file_path: Path):
         print(f"[ERROR] {e}")
 
 
+def process_file(file_path: Path):
+    folder_name = file_path.parent.name
+    info = parse_folder_name(folder_name)
+
+    # フォルダ名から会議情報が取れない場合、Googleカレンダーで直前会議を検索
+    if not info["date"] or info["title"] == folder_name:
+        file_mtime = datetime.fromtimestamp(file_path.stat().st_mtime, tz=timezone.utc)
+        cal_info = fetch_meeting_from_calendar_by_time(file_mtime)
+        if cal_info["title"]:
+            info.update(cal_info)
+
+    print(f"\n{'='*50}")
+    print(f"処理開始: {folder_name}")
+    print(f"会議名: {info['title']} / 日付: {info['date']} / 先方: {info['other']}")
+    process_file_from_info(file_path, info)
+
+
 class ZoomFolderHandler(FileSystemEventHandler):
     def __init__(self):
         self.processed = load_processed()
 
-    def _handle_mp4(self, path: Path):
-        if path.suffix.lower() not in {".mp4", ".m4v"}:
+    def _handle_file(self, path: Path):
+        suffix = path.suffix.lower()
+        if suffix not in {".mp4", ".m4v", ".vtt", ".txt"}:
             return
         folder_key = str(path.parent)
         if folder_key in self.processed:
@@ -550,22 +798,26 @@ class ZoomFolderHandler(FileSystemEventHandler):
         time.sleep(10)
         self.processed.add(folder_key)
         save_processed(self.processed)
-        # 同じフォルダのVTTを優先、なければMP4を使う
-        vtt_files = list(path.parent.glob("*.vtt"))
-        if vtt_files:
-            print(f"[監視] VTTファイルを使用: {vtt_files[0].name}")
-            process_file(vtt_files[0])
-        else:
-            print(f"[監視] MP4ファイルを使用: {path.name}")
+        if suffix in {".vtt", ".txt"}:
+            print(f"[監視] テキストファイルを使用: {path.name}")
             process_file(path)
+        else:
+            # MP4/M4V の場合は同フォルダのVTTを優先、なければMP4を使う
+            vtt_files = list(path.parent.glob("*.vtt"))
+            if vtt_files:
+                print(f"[監視] VTTファイルを使用: {vtt_files[0].name}")
+                process_file(vtt_files[0])
+            else:
+                print(f"[監視] MP4ファイルを使用: {path.name}")
+                process_file(path)
 
     def on_created(self, event):
         if not event.is_directory:
-            self._handle_mp4(Path(event.src_path))
+            self._handle_file(Path(event.src_path))
 
     def on_moved(self, event):
         if not event.is_directory:
-            self._handle_mp4(Path(event.dest_path))
+            self._handle_file(Path(event.dest_path))
 
 
 if __name__ == "__main__":
@@ -579,6 +831,20 @@ if __name__ == "__main__":
     if missing:
         print(f"[ERROR] 環境変数が未設定: {', '.join(missing)}")
         exit(1)
+
+    # クラウド録画ポーリングモード: python auto_minutes.py poll [--days N] [--dry-run] [--reprocess]
+    if len(sys.argv) >= 2 and sys.argv[1] == "poll":
+        args  = sys.argv[2:]
+        days  = 1
+        for i, a in enumerate(args):
+            if a == "--days" and i + 1 < len(args):
+                days = int(args[i + 1])
+        zoom_poll(
+            days=days,
+            dry_run="--dry-run" in args,
+            reprocess="--reprocess" in args,
+        )
+        exit(0)
 
     # テストモード: python auto_minutes.py test "フォルダ名の一部" [--force]
     if len(sys.argv) >= 2 and sys.argv[1] == "test":
@@ -618,7 +884,35 @@ if __name__ == "__main__":
     print(f"監視開始: {ZOOM_FOLDER}")
     print("Ctrl+C で停止")
 
-    handler  = ZoomFolderHandler()
+    handler = ZoomFolderHandler()
+
+    # 起動時スキャン：既存の未処理ファイルを処理する
+    print("[起動スキャン] 未処理ファイルを確認中...")
+    scan_count = 0
+    if ZOOM_FOLDER.exists():
+        for folder in sorted(ZOOM_FOLDER.iterdir()):
+            if not folder.is_dir():
+                continue
+            folder_key = str(folder)
+            if folder_key in handler.processed:
+                continue
+            target = None
+            for ext in [".vtt", ".txt", ".mp4", ".m4a", ".m4v"]:
+                files = list(folder.glob(f"*{ext}"))
+                if files:
+                    target = files[0]
+                    break
+            if target:
+                print(f"[起動スキャン] 未処理: {folder.name}")
+                handler.processed.add(folder_key)
+                save_processed(handler.processed)
+                process_file(target)
+                scan_count += 1
+    if scan_count == 0:
+        print("[起動スキャン] 未処理ファイルなし")
+    else:
+        print(f"[起動スキャン] {scan_count}件処理しました")
+
     observer = Observer()
     observer.schedule(handler, str(ZOOM_FOLDER), recursive=True)
     observer.start()
